@@ -15,6 +15,12 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local VirtualUser = game:GetService("VirtualUser")
 local Workspace = game:GetService("Workspace")
+
+local function safeRequire(inst)
+    if not inst then return nil end
+    local ok, res = pcall(require, inst)
+    return (ok and res) and res or nil
+end
 local StarterGui = game:GetService("StarterGui")
 
 local LocalPlayer = Players.LocalPlayer
@@ -58,11 +64,17 @@ env.__HelmAnimeCardVerseCleanup = function()
         LocalPlayer:SetAttribute("Gamepass_InfiniteMagnet", nil)
     end)
 
-    -- Gỡ bỏ NoClip và BodyVelocity nếu đang bật
+    -- Gỡ bỏ NoClip, LinearVelocity và BodyVelocity nếu đang bật
     if LocalPlayer.Character then
         local root = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-        local bv = root and root:FindFirstChild("Helm_AntiGravity")
-        if bv then bv:Destroy() end
+        if root then
+            local lv = root:FindFirstChild("Helm_TransitLV")
+            if lv then lv:Destroy() end
+            local att = root:FindFirstChild("Helm_TransitAttachment")
+            if att then att:Destroy() end
+            local bv = root:FindFirstChild("Helm_AntiGravity")
+            if bv then bv:Destroy() end
+        end
 
         for _, part in ipairs(LocalPlayer.Character:GetDescendants()) do
             if part:IsA("BasePart") then
@@ -71,6 +83,40 @@ env.__HelmAnimeCardVerseCleanup = function()
         end
     end
 end
+
+-- ========================================================================
+-- [1.5] VÔ HIỆU HÓA HOÀN TOÀN CƠ CHẾ AUTO-POSITION & KÉO VỀ CHỖ CŨ NỘI BỘ CỦA GAME
+-- ========================================================================
+pcall(function()
+    local apConfig = safeRequire(ReplicatedStorage:FindFirstChild("DataModules")
+        and ReplicatedStorage.DataModules:FindFirstChild("World")
+        and ReplicatedStorage.DataModules.World:FindFirstChild("AutoPositionConfig"))
+    if apConfig then
+        apConfig.AnchorAttr = "__DisabledAnchorAttr__"
+        apConfig.MapAttr = "__DisabledMapAttr__"
+        apConfig.ReturnDistance = 1e9
+        apConfig.IdleBeforeReturn = 1e9
+        apConfig.WaypointTimeout = 0
+    end
+    LocalPlayer:SetAttribute("AutoPositionAnchor", nil)
+    LocalPlayer:SetAttribute("AutoPositionMap", nil)
+    trackConnection(LocalPlayer:GetAttributeChangedSignal("AutoPositionAnchor"):Connect(function()
+        if LocalPlayer:GetAttribute("AutoPositionAnchor") ~= nil then
+            LocalPlayer:SetAttribute("AutoPositionAnchor", nil)
+        end
+    end))
+    trackConnection(LocalPlayer:GetAttributeChangedSignal("AutoPositionMap"):Connect(function()
+        if LocalPlayer:GetAttribute("AutoPositionMap") ~= nil then
+            LocalPlayer:SetAttribute("AutoPositionMap", nil)
+        end
+    end))
+end)
+pcall(function()
+    local sc = safeRequire(ReplicatedStorage:FindFirstChild("Utilities") and ReplicatedStorage.Utilities:FindFirstChild("SummonCutscene"))
+    if sc then
+        sc.IsPlaying = function() return false end
+    end
+end)
 
 -- ========================================================================
 -- [2] NẠP THƯ VIỆN GIAO DIỆN (HELMHUB UI INVENTORY)
@@ -133,11 +179,7 @@ end
 -- ========================================================================
 -- [3] KẾT NỐI HỆ THỐNG GIAO THỨC MẠNG (REMOTE BANK & CLIENT MODULES)
 -- ========================================================================
-local function safeRequire(inst)
-    if not inst then return nil end
-    local ok, res = pcall(require, inst)
-    return (ok and res) and res or nil
-end
+-- safeRequire defined at top of script
 
 local RemoteBank = safeRequire(ReplicatedStorage:WaitForChild("RemoteBank", 15))
 local Lib = safeRequire(ReplicatedStorage:FindFirstChild("Lib"))
@@ -150,7 +192,7 @@ local InvasionData = safeRequire(ReplicatedStorage:FindFirstChild("DataModules")
     and ReplicatedStorage.DataModules.World:FindFirstChild("InvasionData"))
 local Format = safeRequire(ReplicatedStorage:FindFirstChild("Utilities") and ReplicatedStorage.Utilities:FindFirstChild("Format"))
 local AttackClient = nil
-local MovementClient = nil
+local _MovementClient = nil
 
 pcall(function()
     local ps = LocalPlayer:WaitForChild("PlayerScripts", 5)
@@ -202,9 +244,9 @@ end)
 -- [4] CẤU HÌNH TRẠNG THÁI TOÀN CỤC (GLOBAL STATE)
 -- ========================================================================
 local Config = {
-    -- Combat: Melee Punch
+    -- Combat: Melee Punch (Đồng bộ nhịp chuẩn Server 350ms tránh drop đòn)
     AutoPunch = false,
-    PunchDelay = 0.015,
+    PunchDelay = 0.35,
 
     -- Combat: Powers & Hotbar Skills
     AutoSkills = false,
@@ -226,9 +268,13 @@ local Config = {
     -- Auto Positioning & Safety
     AutoPosition = false,
     PositionMode = "BehindMob", -- "BehindMob", "GroundMelee", "FrontMob", "HoverAbove"
+    MovementStyle = "Glide", -- "Glide" (Lướt mượt chuẩn Server), "Walk" (Chạy bộ tự nhiên), "Instant" (Dịch chuyển tức thời)
+    GlideSpeed = 25, -- Tốc độ tiếp cận quái (studs/s) - mặc định 25 studs/s chuẩn native sprint (an toàn không rollback)
+    AutoMount = false, -- Tự động cưỡi Mount khi di chuyển xa (>12 studs) và tự xuống khi áp sát quái
+    StayMountedCombat = false, -- Thử nghiệm giữ nguyên Mount khi cận chiến (bắn thẳng PunchRemote)
     CombatHeightOffset = 0, -- Độ cao tùy chỉnh so với tâm quái (-5 đến +20 studs, 0 = ngang người quái trúng 100%)
     HoverHeight = 6,
-    BehindDistance = 2.5, -- Khoảng cách áp sát quái (2.5 studs nằm trọn trong hitbox đánh thường)
+    BehindDistance = 1, -- Khoảng cách áp sát quái (1 stud cận chiến chạm hitbox 100%)
     NoClip = false,
 
     -- Auto Dodge (Né Chiêu Boss & Vùng Đỏ Telegraph - Độc lập hoàn toàn)
@@ -261,6 +307,7 @@ local Config = {
 
     -- [ƯU TIÊN 1] Auto Bounty (Tự nhận, tự tele sang đúng World, săn đúng quái & tự trả nhiệm vụ 1/10 -> 10/10)
     AutoBounty = false,
+    BountyAutoPunch = true,
     BountyAutoTeleport = true,
     BountyAutoSkills = true,
 
@@ -279,14 +326,25 @@ local Config = {
     AutoReplayMission = false,
     MissionDecisionType = "Retry", -- "Retry" (chơi lại), "Next" (đi tiếp), "Return" (về map)
 
+    -- Auto Challenges
+    AutoChallenge = false,
+    ChallengeSelectedTier = "Tất Cả (Daily -> Weekly -> Regular)",
+
     -- Auto Gacha / Summon
     AutoSummon = false,
     SummonBanner = "Standard Powers",
     SummonCount = 1,
 
-    -- Misc
+    -- Merchant Auto Buy (Bob E.O)
+    AutoBuyMerchant = false,
+    SelectedShopItems = { "Trait Rerolls", "Stat Cubes", "Stat Prisms" },
+
+    -- Misc & UI
     AntiAFK = true,
-    AlwaysSprint = false
+    AlwaysSprint = false,
+    CustomPlayerSpeedEnabled = false,
+    PlayerWalkSpeed = 26, -- Tốc độ chạy tùy chỉnh của Player (Mặc định 26 studs/s an toàn tuyệt đối)
+    FloatingMenuButton = true
 }
 
 -- ========================================================================
@@ -362,6 +420,14 @@ local function getActiveMapFolder()
 
     return mapRoot:FindFirstChild("Lobby")
 end
+
+local currentWaveInfo = {
+    wave = 0,
+    totalWaves = 0,
+    enemiesAlive = 0,
+    enemiesTotal = 0,
+    title = ""
+}
 
 -- Kiểm tra xem người chơi có đang ở trong màn chơi Sự Kiện Xâm Lược (Invasion) hay không
 local function isInInvasion()
@@ -469,8 +535,11 @@ local function isValidCombatTarget(mob, activeMapFolder)
     if not mob or not mob.Parent then return false end
     if Players:GetPlayerFromCharacter(mob) or mob == LocalPlayer.Character then return false end
 
+    -- Bỏ qua NPC đối thoại có ProximityPrompt (Bob E.O, Bounty, Quests NPC)
+    if mob:FindFirstChildWhichIsA("ProximityPrompt", true) then return false end
+
     local pName = mob.Parent and mob.Parent.Name:lower() or ""
-    if pName:find("asset") or pName:find("npc") then return false end
+    if pName == "npcs" or pName == "npc" then return false end
 
     local hum = mob:FindFirstChildOfClass("Humanoid")
     if not hum or hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead then
@@ -491,7 +560,16 @@ local function isValidCombatTarget(mob, activeMapFolder)
         return false
     end
 
-    -- Không bao giờ nhắm quái thuộc Lobby hoặc MapStorage
+    local inMission = isInMission()
+    local inInvasion = isInInvasion()
+
+    -- Trong màn Phó Bản (Missions, Challenges, Gauntlet) & Sự Kiện Xâm Lược (Invasion):
+    -- MỌI quái sống có Humanoid trên sàn đấu đều hợp lệ 100% (không bị chặn bởi thư mục Lobby hay Assets)
+    if inMission or inInvasion then
+        return true
+    end
+
+    -- Ngoài thế giới thông thường: Không nhắm dummy hoặc quái chưa kích hoạt trong Lobby / MapStorage
     local mapRoot = Workspace:FindFirstChild("Map")
     local lobbyFolder = mapRoot and mapRoot:FindFirstChild("Lobby")
     if lobbyFolder and mob:IsDescendantOf(lobbyFolder) then
@@ -506,15 +584,6 @@ local function isValidCombatTarget(mob, activeMapFolder)
     local mapFolder = activeMapFolder or getActiveMapFolder()
     if mapFolder and mapFolder.Name ~= "Lobby" then
         if mob:IsDescendantOf(mapFolder) then
-            local spawnPart = mapFolder:FindFirstChild("SpawnPart", true)
-            if spawnPart and spawnPart:IsA("BasePart") then
-                if pos.Y < (spawnPart.Position.Y - 25) then
-                    return false
-                end
-                if (pos - spawnPart.Position).Magnitude > 15000 then
-                    return false
-                end
-            end
             return true
         end
     end
@@ -523,24 +592,24 @@ local function isValidCombatTarget(mob, activeMapFolder)
         return true
     end
 
-    -- Trong màn Phó Bản & Sự Kiện Xâm Lược, mọi quái sống/Totem có Humanoid trên sàn map đều hợp lệ
-    if isInMission() or isInInvasion() then
-        return true
-    end
-
     return false
 end
 
 local function getAllEnemies()
     local enemiesList = {}
+    local inMission = isInMission()
+    local inInvasion = isInInvasion()
     local currentMapFolder = getActiveMapFolder()
-    if currentMapFolder and currentMapFolder.Name == "Lobby" and not isInMission() then
+
+    -- Nếu đang ở ngoài Sảnh Lobby thông thường (không trong Mission / không trong Invasion): không có quái chiến đấu
+    if not inMission and not inInvasion and currentMapFolder and currentMapFolder.Name == "Lobby" then
         return enemiesList
     end
 
     local scanned = {}
-    -- 1. Quét map folder hiện tại
-    if currentMapFolder and currentMapFolder.Name ~= "Lobby" then
+
+    -- [BƯỚC 1: Quét bản đồ hiện tại]
+    if currentMapFolder then
         for _, desc in ipairs(currentMapFolder:GetDescendants()) do
             if desc:IsA("Model") and not scanned[desc] and isValidCombatTarget(desc, currentMapFolder) then
                 scanned[desc] = true
@@ -549,13 +618,32 @@ local function getAllEnemies()
         end
     end
 
-    -- 2. Nếu đang trong Mission hoặc chưa tìm thấy quái, quét toàn bộ Workspace.Map (trừ Lobby/MapStorage)
+    -- [BƯỚC 2: Quét toàn bộ các nhánh trong Workspace.Map]
     local mapRoot = Workspace:FindFirstChild("Map")
-    if mapRoot and (#enemiesList == 0 or isInMission()) then
+    if mapRoot then
         for _, child in ipairs(mapRoot:GetChildren()) do
-            if child.Name ~= "Lobby" and child.Name ~= "MapStorage" and child.Name ~= "Terrain" then
+            -- Khi ở trong Mission, quét TẤT CẢ các thư mục map (kể cả Lobby nếu màn đấu nằm trong Lobby Assets)
+            if inMission or inInvasion or (child.Name ~= "Lobby" and child.Name ~= "MapStorage" and child.Name ~= "Terrain") then
                 for _, desc in ipairs(child:GetDescendants()) do
                     if desc:IsA("Model") and not scanned[desc] and isValidCombatTarget(desc, child) then
+                        scanned[desc] = true
+                        table.insert(enemiesList, desc)
+                    end
+                end
+            end
+        end
+    end
+
+    -- [BƯỚC 3: QUÉT DỰ PHÒNG TOÀN DIỆN WORKSPACE KHI ĐANG TRONG MISSION / INVASION]
+    -- Đảm bảo 100% tìm thấy quái dù quái spawn ở Workspace.Enemies, Workspace.Live, Workspace.Mobs hay bất kỳ đâu
+    if (inMission or inInvasion) and #enemiesList == 0 then
+        for _, obj in ipairs(Workspace:GetChildren()) do
+            if obj:IsA("Model") and not scanned[obj] and isValidCombatTarget(obj, nil) then
+                scanned[obj] = true
+                table.insert(enemiesList, obj)
+            elseif (obj:IsA("Folder") or obj:IsA("Model")) and obj.Name ~= "Terrain" and obj.Name ~= "Camera" then
+                for _, desc in ipairs(obj:GetDescendants()) do
+                    if desc:IsA("Model") and not scanned[desc] and isValidCombatTarget(desc, nil) then
                         scanned[desc] = true
                         table.insert(enemiesList, desc)
                     end
@@ -805,7 +893,7 @@ local function isQuestOverrideActive()
     return true, status
 end
 
-local function getQuestNPCModel(npcName, questlineId)
+local function _getQuestNPCModel(npcName, questlineId)
     local activeMap = getActiveMapFolder()
     local npcs = activeMap and activeMap:FindFirstChild("NPCs")
     if npcs then
@@ -1002,6 +1090,123 @@ local function isBountyOverrideActive()
     return true, status
 end
 
+-- ========================================================================
+-- [6B] CHALLENGES & MILESTONES ENGINE
+-- ========================================================================
+local ChallengeDataModule
+pcall(function()
+    ChallengeDataModule = require(ReplicatedStorage.DataModules.Progression.ChallengeData)
+end)
+
+local function isChallengeClaimed(tier, slot)
+    local claimed = false
+    pcall(function()
+        if DataClient and typeof(DataClient.Get) == "function" then
+            local prog = DataClient.Get("ChallengeProgress")
+            if type(prog) == "table" and type(prog[tier]) == "table" then
+                local tProg = prog[tier]
+                local period = ChallengeDataModule and ChallengeDataModule.GetPeriod(tier, os.time()) or 0
+                if tProg.period == period and type(tProg.claimed) == "table" then
+                    claimed = (tProg.claimed[tostring(slot)] == true)
+                end
+            end
+        end
+    end)
+    return claimed
+end
+
+local function getChallengeInfo()
+    if not ChallengeDataModule then
+        pcall(function()
+            ChallengeDataModule = require(ReplicatedStorage.DataModules.Progression.ChallengeData)
+        end)
+    end
+    local now = os.time()
+    local dailyRem = 0
+    local weeklyRem = 0
+    local regularRem = 0
+    if ChallengeDataModule and typeof(ChallengeDataModule.GetTimeRemaining) == "function" then
+        pcall(function()
+            dailyRem = ChallengeDataModule.GetTimeRemaining("Daily", now) or 0
+            weeklyRem = ChallengeDataModule.GetTimeRemaining("Weekly", now) or 0
+            regularRem = ChallengeDataModule.GetTimeRemaining("Regular", now) or 0
+        end)
+    end
+    return {
+        dailyTime = dailyRem,
+        weeklyTime = weeklyRem,
+        regularTime = regularRem,
+        dailyClaimed = isChallengeClaimed("Daily", 1),
+        weeklyClaimed = isChallengeClaimed("Weekly", 1)
+    }
+end
+
+local function launchConfiguredChallenge()
+    local targetTier = "Daily"
+    local targetSlot = 1
+    local sel = tostring(Config.ChallengeSelectedTier or "Tất Cả (Daily -> Weekly -> Regular)")
+    if sel:find("Weekly") then
+        targetTier = "Weekly"
+        targetSlot = 1
+    elseif sel:find("Regular") then
+        targetTier = "Regular"
+        targetSlot = tonumber(sel:match("%d+")) or 1
+    elseif sel:find("Tất Cả") or sel:find("All") then
+        local dClaimed = isChallengeClaimed("Daily", 1)
+        local wClaimed = isChallengeClaimed("Weekly", 1)
+        if not dClaimed then
+            targetTier = "Daily"
+            targetSlot = 1
+        elseif not wClaimed then
+            targetTier = "Weekly"
+            targetSlot = 1
+        else
+            targetTier = "Regular"
+            targetSlot = 1
+        end
+    else
+        targetTier = "Daily"
+        targetSlot = 1
+    end
+
+    pcall(function()
+        if RemoteBank and RemoteBank.MissionLaunch then
+            RemoteBank.MissionLaunch:Fire({
+                gamemode = "Challenge",
+                tier = targetTier,
+                index = targetSlot
+            })
+            notify("Auto Challenge", string.format("Đang khởi động %s Challenge (Slot %d)!", targetTier, targetSlot), 3)
+        end
+    end)
+end
+
+local function claimAllLevelMilestones()
+    pcall(function()
+        if RemoteBank and RemoteBank.ClaimLevelMilestone then
+            for lvl = 5, 50, 5 do
+                RemoteBank.ClaimLevelMilestone:Fire(lvl)
+            end
+        end
+    end)
+end
+
+local function claimAllAchievements()
+    pcall(function()
+        local cats = { "General", "Combat", "Progression", "Collection", "Social" }
+        for _, cat in ipairs(cats) do
+            if RemoteBank and RemoteBank.AchievementClaimMilestone then
+                RemoteBank.AchievementClaimMilestone:Fire(cat)
+            end
+            if RemoteBank and RemoteBank.AchievementClaimTask then
+                for taskId = 1, 30 do
+                    RemoteBank.AchievementClaimTask:Fire(cat, taskId)
+                end
+            end
+        end
+    end)
+end
+
 local function getActivePriorityMode()
     if isInInvasion() then
         return "InvasionCombat", nil
@@ -1012,6 +1217,9 @@ local function getActivePriorityMode()
     end
     if isInMission() and Config.AutoMissionFarm then
         return "Mission", nil
+    end
+    if Config.AutoChallenge and not isInMission() and not isInInvasion() then
+        return "Challenge", nil
     end
     local questActive, questStatus = isQuestOverrideActive()
     local bountyActive, bountyStatus = isBountyOverrideActive()
@@ -1046,16 +1254,29 @@ local function getSpecificSelectedMobs()
     return specific
 end
 
+local function isMobNameMatch(candidateName, targetName)
+    if not candidateName or not targetName then return false end
+    local c = tostring(candidateName):lower():gsub("^%s+", ""):gsub("%s+$", "")
+    local t = tostring(targetName):lower():gsub("^%s+", ""):gsub("%s+$", "")
+    if c == t then return true end
+
+    -- Loại bỏ các đuôi clone, số ID, ngoặc đơn/ngoặc vuông (ví dụ Goblin_1, Goblin#2, Goblin (3), Goblin [Lvl 50])
+    -- Chống nhầm lẫn giữa Goblin và Goblin Shaman
+    local cClean = c:gsub("%b()", ""):gsub("%b[]", ""):gsub("%b{}", "")
+    cClean = cClean:gsub("[#_%-]%d+$", ""):gsub("%s+%d+$", ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if cClean == t then return true end
+
+    return false
+end
+
 local function isMobSelectedByFilter(mobName)
     if not mobName then return false end
     local specific = getSpecificSelectedMobs()
     if #specific == 0 then
         return true
     end
-    local mobLower = tostring(mobName):lower()
     for _, sel in ipairs(specific) do
-        local selLower = sel:lower()
-        if mobLower == selLower or mobLower:find(selLower, 1, true) then
+        if isMobNameMatch(mobName, sel) then
             return true
         end
     end
@@ -1105,32 +1326,26 @@ local function getBestTarget()
             if mRoot and mHum then
                 local shouldSkip = false
 
-                -- HỆ THỐNG ƯU TIÊN 5 TẦNG:
+                -- HỆ THỐNG ƯU TIÊN 5 TẦNG (PHÂN BIỆT CHÍNH XÁC QUÁI - KHÔNG NHẦM GOBLIN VÀ GOBLIN SHAMAN):
                 -- [TẦNG 0 - SỰ KIỆN INVASION]: Khóa Totem, Boss Egris và quái trại
                 if inInvasion and Config.InvasionAutoFarm then
                     -- Quét mọi mục tiêu trong Invasion (Totem / Boss Egris / Camp Mobs)
                 -- [TẦNG 1 - PHÓ BẢN MISSIONS]: Đang ở trong Phó Bản
-                elseif inMission and Config.AutoMissionFarm then
+                elseif inMission and (Config.AutoMission or Config.AutoMissionFarm) then
                     -- Nhắm toàn bộ quái sống trong Wave của màn chơi để vượt ải
                 -- [TẦNG 2A - NGOÀI WORLD: AUTO QUESTS (Ưu Tiên Mở World)]:
                 elseif (not inMission) and (not inInvasion) and questActive and questStatus and questStatus.targetEnemy and (Config.QuestPriorityOverBounty or not bountyActive) then
-                    local targetEnemyLower = tostring(questStatus.targetEnemy):lower()
-                    local mobNameLower = mob.Name:lower()
-                    if mobNameLower ~= targetEnemyLower and not mobNameLower:find(targetEnemyLower, 1, true) then
+                    if not isMobNameMatch(mob.Name, questStatus.targetEnemy) then
                         shouldSkip = true
                     end
                 -- [TẦNG 2B - NGOÀI WORLD: AUTO BOUNTY]:
                 elseif (not inMission) and (not inInvasion) and bountyActive and bountyStatus and bountyStatus.enemy and bountyStatus.enemy ~= "" then
-                    local targetEnemyLower = tostring(bountyStatus.enemy):lower()
-                    local mobNameLower = mob.Name:lower()
-                    if mobNameLower ~= targetEnemyLower and not mobNameLower:find(targetEnemyLower, 1, true) then
+                    if not isMobNameMatch(mob.Name, bountyStatus.enemy) then
                         shouldSkip = true
                     end
                 -- [TẦNG 2C - NGOÀI WORLD: AUTO QUESTS (Khi xếp sau Bounty)]:
                 elseif (not inMission) and (not inInvasion) and questActive and questStatus and questStatus.targetEnemy then
-                    local targetEnemyLower = tostring(questStatus.targetEnemy):lower()
-                    local mobNameLower = mob.Name:lower()
-                    if mobNameLower ~= targetEnemyLower and not mobNameLower:find(targetEnemyLower, 1, true) then
+                    if not isMobNameMatch(mob.Name, questStatus.targetEnemy) then
                         shouldSkip = true
                     end
                 -- [TẦNG 3 - NGOÀI WORLD]: Chiến Đấu Thường
@@ -1154,10 +1369,14 @@ local function getBestTarget()
                                 score = dist - 100000 -- Ưu tiên phá Totem trước quái trại
                             end
                         elseif Config.TargetMode == "LowestHP" then
-                            score = mHum.Health
+                            -- Ưu tiên dứt điểm quái máu thấp trong cụm nhưng không bao giờ chạy xa bỏ quái trước mặt
+                            score = dist + (mHum.Health / math.max(1, mHum.MaxHealth)) * 40
                         elseif Config.TargetMode == "BossFirst" then
                             local isBoss = mHum.MaxHealth > 5000 or mob.Name:lower():find("boss")
                             score = isBoss and (dist - 100000) or dist
+                        else
+                            -- "Nearest" (Mặc định): Luôn luôn nhắm quái gần vị trí nhân vật nhất
+                            score = dist
                         end
 
                         if score < bestScore then
@@ -1230,18 +1449,6 @@ local function canCastUltimate()
         end
     end
     return true
-end
-
--- Tự động phản hồi HitboxClassRemote để xác thực mọi va chạm đòn đánh
-local HitboxClassRemote = ReplicatedStorage:FindFirstChild("HitboxClassRemote")
-if HitboxClassRemote and HitboxClassRemote:IsA("RemoteEvent") then
-    trackConnection(HitboxClassRemote.OnClientEvent:Connect(function(action, payload)
-        if action == "New" and type(payload) == "table" and payload._Tick then
-            pcall(function()
-                HitboxClassRemote:FireServer(payload._Tick)
-            end)
-        end
-    end))
 end
 
 -- ========================================================================
@@ -1441,13 +1648,45 @@ end
 
 local isActivelyLockingTarget = false
 local wasNoClipActive = false
+local currentLockedTarget = nil
+local currentApproachDir = nil
+
+local function isPlayerMounted()
+    return LocalPlayer:GetAttribute("Mount") ~= nil or (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Mount") ~= nil)
+end
+
+local lastMountToggleTime = 0
+local function setPlayerMounted(shouldMount)
+    local now = tick()
+    if now - lastMountToggleTime < 0.6 then return end
+
+    local currentlyMounted = isPlayerMounted()
+    if shouldMount and not currentlyMounted then
+        lastMountToggleTime = now
+        pcall(function()
+            if RemoteBank and RemoteBank.MountToggle then
+                RemoteBank.MountToggle:Fire()
+            end
+        end)
+    elseif not shouldMount and currentlyMounted then
+        lastMountToggleTime = now
+        pcall(function()
+            if RemoteBank and RemoteBank.MountToggle then
+                RemoteBank.MountToggle:Fire()
+            end
+        end)
+    end
+end
 
 local function restoreCharacterCollision()
-    if LocalPlayer.Character then
-        for _, partName in ipairs({ "HumanoidRootPart", "Torso", "UpperTorso", "LowerTorso" }) do
-            local p = LocalPlayer.Character:FindFirstChild(partName)
-            if p and p:IsA("BasePart") then
-                p.CanCollide = true
+    local char = LocalPlayer.Character
+    if char then
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then
+                local name = part.Name
+                if name:find("Leg") or name:find("Foot") or name:find("Torso") or name == "HumanoidRootPart" or name == "Head" then
+                    part.CanCollide = true
+                end
             end
         end
     end
@@ -1455,18 +1694,30 @@ end
 
 local function releaseCombatLock()
     isActivelyLockingTarget = false
+    currentLockedTarget = nil
+    currentApproachDir = nil
     local char = LocalPlayer.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if root then
+        local lv = root:FindFirstChild("Helm_TransitLV")
+        if lv then lv:Destroy() end
+        local att = root:FindFirstChild("Helm_TransitAttachment")
+        if att then att:Destroy() end
         local bv = root:FindFirstChild("Helm_AntiGravity")
         if bv then bv:Destroy() end
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        hum:MoveTo(root and root.Position or Vector3.zero)
     end
     if not Config.NoClip then
         restoreCharacterCollision()
     end
 end
 
-trackConnection(RunService.Heartbeat:Connect(function()
+trackConnection(RunService.Heartbeat:Connect(function(dt)
     if not isScriptRunning then return end
 
     local char = LocalPlayer.Character
@@ -1497,44 +1748,36 @@ trackConnection(RunService.Heartbeat:Connect(function()
     local questActive, questStatus = isQuestOverrideActive()
     local bountyActive, bountyStatus = isBountyOverrideActive()
     local shouldPosition = false
-    if inInvasion and Config.InvasionAutoFarm then
-        -- [ƯU TIÊN 0: INVASION] Teleport áp sát Totem & Boss Egris
-        shouldPosition = Config.InvasionAutoTeleport or Config.AutoPosition
-    elseif inMission and Config.AutoMissionFarm then
-        -- [ƯU TIÊN 1: PHÓ BẢN]: Teleport áp sát quái trong màn chơi
-        shouldPosition = Config.MissionAutoTeleport or Config.AutoPosition
-    elseif Config.QuestPriorityOverBounty and questActive then
-        -- [ƯU TIÊN 2A: QUESTS NGOÀI WORLD]
+
+    -- [ƯU TIÊN TUYỆT ĐỐI]: Nếu người chơi bật AutoPosition ở Tab Chiến Đấu -> Luôn áp sát quái không bị chặn!
+    if Config.AutoPosition then
+        shouldPosition = true
+    elseif inInvasion and Config.InvasionAutoFarm and Config.InvasionAutoTeleport then
+        shouldPosition = true
+    elseif inMission and (Config.AutoMission or Config.AutoMissionFarm) and Config.MissionAutoTeleport then
+        shouldPosition = true
+    elseif Config.QuestPriorityOverBounty and questActive and Config.QuestAutoTeleport then
         local onQuestWorld = (not questStatus.world or getCurrentMapName() == questStatus.world)
-        shouldPosition = Config.QuestAutoTeleport and onQuestWorld
-    elseif bountyActive then
-        -- [ƯU TIÊN 2B: BOUNTY NGOÀI WORLD]: Chỉ tele áp sát quái Bounty khi đang ở đúng Map của quái đó
+        shouldPosition = onQuestWorld
+    elseif bountyActive and Config.BountyAutoTeleport then
         local onBountyWorld = (not bountyStatus.world or getCurrentMapName() == bountyStatus.world)
-        shouldPosition = Config.BountyAutoTeleport and onBountyWorld
-    elseif questActive then
-        -- [ƯU TIÊN 2C: QUESTS (Sau Bounty)]
+        shouldPosition = onBountyWorld
+    elseif questActive and Config.QuestAutoTeleport then
         local onQuestWorld = (not questStatus.world or getCurrentMapName() == questStatus.world)
-        shouldPosition = Config.QuestAutoTeleport and onQuestWorld
-    else
-        -- [ƯU TIÊN 3: CHIẾN ĐẤU THƯỜNG NGOÀI WORLD]
-        shouldPosition = Config.AutoPosition
+        shouldPosition = onQuestWorld
     end
 
-    -- 2. Khi không bật giữ vị trí / Tele: tắt ngay BodyVelocity để nhân vật đứng tự do, chỉ né khi AutoDodge bật
+    -- 2. Khi không bật giữ vị trí: giải phóng khóa mục tiêu và để người chơi di chuyển hoàn toàn tự nhiên
     if not shouldPosition then
-        isActivelyLockingTarget = false
+        if isActivelyLockingTarget then
+            releaseCombatLock()
+        end
         local dodgePos = computeDodgeEscape(root.Position, root.Position.Y)
         if dodgePos then
             local safeDodgeY = math.max(dodgePos.Y, getSafeStandingY(dodgePos, root.Position.Y, activeMap, 0))
             local finalDodge = Vector3.new(dodgePos.X, safeDodgeY, dodgePos.Z)
             root.CFrame = CFrame.new(finalDodge, finalDodge + root.CFrame.LookVector)
             root.AssemblyLinearVelocity = Vector3.zero
-        else
-            local bv = root:FindFirstChild("Helm_AntiGravity")
-            if bv then bv:Destroy() end
-            if not Config.NoClip then
-                restoreCharacterCollision()
-            end
         end
         return
     end
@@ -1543,10 +1786,16 @@ trackConnection(RunService.Heartbeat:Connect(function()
     local target = Config.TargetCurrent
     local needRescan = not isValidCombatTarget(target, activeMap)
     if not needRescan and not (inInvasion and Config.InvasionAutoFarm) and not (inMission and Config.AutoMissionFarm) then
-        if bountyActive and bountyStatus and bountyStatus.enemy and bountyStatus.enemy ~= "" then
-            local tEnemyLower = tostring(bountyStatus.enemy):lower()
-            local curNameLower = target.Name:lower()
-            if curNameLower ~= tEnemyLower and not curNameLower:find(tEnemyLower, 1, true) then
+        if questActive and questStatus and questStatus.targetEnemy and (Config.QuestPriorityOverBounty or not bountyActive) then
+            if not isMobNameMatch(target.Name, questStatus.targetEnemy) then
+                needRescan = true
+            end
+        elseif bountyActive and bountyStatus and bountyStatus.enemy and bountyStatus.enemy ~= "" then
+            if not isMobNameMatch(target.Name, bountyStatus.enemy) then
+                needRescan = true
+            end
+        elseif questActive and questStatus and questStatus.targetEnemy then
+            if not isMobNameMatch(target.Name, questStatus.targetEnemy) then
                 needRescan = true
             end
         else
@@ -1561,20 +1810,15 @@ trackConnection(RunService.Heartbeat:Connect(function()
     end
 
     if not target or not isValidCombatTarget(target, activeMap) then
-        isActivelyLockingTarget = false
+        if isActivelyLockingTarget then
+            releaseCombatLock()
+        end
         local dodgePos = computeDodgeEscape(root.Position, root.Position.Y)
         if dodgePos then
             local safeDodgeY = math.max(dodgePos.Y, getSafeStandingY(dodgePos, root.Position.Y, activeMap, 0))
             local finalDodge = Vector3.new(dodgePos.X, safeDodgeY, dodgePos.Z)
             root.CFrame = CFrame.new(finalDodge, finalDodge + root.CFrame.LookVector)
             root.AssemblyLinearVelocity = Vector3.zero
-        else
-            -- Khi hết quái (chờ Wave mới hoặc ở Lobby), gỡ bỏ AntiGravity & bật lại va chạm sàn để không trôi xuống đất
-            local bv = root:FindFirstChild("Helm_AntiGravity")
-            if bv then bv:Destroy() end
-            if not Config.NoClip then
-                restoreCharacterCollision()
-            end
         end
         return
     end
@@ -1582,65 +1826,62 @@ trackConnection(RunService.Heartbeat:Connect(function()
     local tRoot = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChild("Torso")
     if not tRoot then
         isActivelyLockingTarget = false
+        currentLockedTarget = nil
+        currentApproachDir = nil
         return
     end
 
     isActivelyLockingTarget = true
 
-    -- Bật Anti-Gravity BodyVelocity khi đang khóa mục tiêu sống
-    local bv = root:FindFirstChild("Helm_AntiGravity")
-    if not bv then
-        bv = Instance.new("BodyVelocity")
-        bv.Name = "Helm_AntiGravity"
-        bv.MaxForce = Vector3.new(1e7, 1e7, 1e7)
-        bv.Velocity = Vector3.zero
-        bv.Parent = root
-    end
-    bv.Velocity = Vector3.zero
-
-    -- Phẳng hóa vector hướng nhìn của quái trên mặt phẳng XZ (chống lỗi quái chúi đầu làm nhân vật bị cắm xuống dưới sàn)
     local mobPos = tRoot.Position
-    local mobFlatLook = Vector3.new(tRoot.CFrame.LookVector.X, 0, tRoot.CFrame.LookVector.Z)
-    if mobFlatLook.Magnitude < 0.05 then
-        mobFlatLook = Vector3.new(0, 0, -1)
-    else
-        mobFlatLook = mobFlatLook.Unit
+
+    -- Khóa góc tiếp cận cố định theo quái hiện tại (Chống triệt để lỗi quái xoay mặt làm lật 180 độ gây quay vòng đánh vào không khí)
+    if currentLockedTarget ~= target or not currentApproachDir then
+        currentLockedTarget = target
+        local mobLook = Vector3.new(tRoot.CFrame.LookVector.X, 0, tRoot.CFrame.LookVector.Z)
+        if mobLook.Magnitude < 0.05 then
+            mobLook = Vector3.new(0, 0, -1)
+        else
+            mobLook = mobLook.Unit
+        end
+
+        if Config.PositionMode == "BehindMob" then
+            currentApproachDir = -mobLook
+        elseif Config.PositionMode == "FrontMob" then
+            currentApproachDir = mobLook
+        elseif Config.PositionMode == "HoverAbove" then
+            currentApproachDir = -mobLook
+        else
+            -- GroundMelee: Tính hướng từ quái tới vị trí hiện tại của nhân vật
+            local diff = Vector3.new(root.Position.X - mobPos.X, 0, root.Position.Z - mobPos.Z)
+            currentApproachDir = (diff.Magnitude > 0.1) and diff.Unit or (-mobLook)
+        end
     end
 
-    local distOffset = Config.BehindDistance or 2.5
+    local distOffset = math.max(1, math.floor(tonumber(Config.BehindDistance) or 1))
     local targetCFrame = nil
 
-    if Config.PositionMode == "GroundMelee" then
-        local diff = Vector3.new(root.Position.X - mobPos.X, 0, root.Position.Z - mobPos.Z)
-        local dir = (diff.Magnitude > 0.1) and diff.Unit or (-mobFlatLook)
-        local standXZ = Vector3.new(mobPos.X, 0, mobPos.Z) + dir * distOffset
-        local safeY = getSafeStandingY(standXZ, mobPos.Y, activeMap)
-        local standPos = Vector3.new(standXZ.X, safeY, standXZ.Z)
-        local lookAt = Vector3.new(mobPos.X, mobPos.Y, mobPos.Z)
-        if (lookAt - standPos).Magnitude < 0.1 then lookAt = standPos + mobFlatLook end
-        targetCFrame = CFrame.new(standPos, lookAt)
-    elseif Config.PositionMode == "HoverAbove" then
+    -- Độ cao đứng đánh chuẩn: Dựa trực tiếp vào độ cao sàn của quái mobPos.Y
+    -- Không bắn raycast từ trên cao xuống để loại bỏ 100% tình trạng bắn trúng tán lá cây dừa hoặc nóc nhà gây bay lên trời
+    local targetY = mobPos.Y + (Config.CombatHeightOffset or 0)
+    if Config.PositionMode == "HoverAbove" then
         local hoverH = Config.CombatHeightOffset
         if hoverH == 0 then hoverH = Config.HoverHeight or 6 end
-        local safeY = getSafeStandingY(mobPos, mobPos.Y, activeMap, hoverH)
-        local hoverPos = Vector3.new(mobPos.X, safeY, mobPos.Z) - mobFlatLook * math.max(distOffset, 2.0)
-        local lookAt = Vector3.new(mobPos.X, mobPos.Y, mobPos.Z)
-        if (lookAt - hoverPos).Magnitude < 0.1 then lookAt = hoverPos + mobFlatLook end
+        targetY = mobPos.Y + math.max(3, hoverH)
+        local hoverPos = Vector3.new(mobPos.X, targetY, mobPos.Z) + currentApproachDir * math.max(distOffset, 2.0)
+        local lookAt = Vector3.new(mobPos.X, targetY, mobPos.Z)
+        if (lookAt - hoverPos).Magnitude < 0.1 then
+            lookAt = hoverPos - currentApproachDir
+        end
         targetCFrame = CFrame.new(hoverPos, lookAt)
-    elseif Config.PositionMode == "FrontMob" then
-        local standXZ = Vector3.new(mobPos.X, 0, mobPos.Z) + mobFlatLook * distOffset
-        local safeY = getSafeStandingY(standXZ, mobPos.Y, activeMap)
-        local standPos = Vector3.new(standXZ.X, safeY, standXZ.Z)
-        local lookAt = Vector3.new(mobPos.X, mobPos.Y, mobPos.Z)
-        if (lookAt - standPos).Magnitude < 0.1 then lookAt = standPos - mobFlatLook end
-        targetCFrame = CFrame.new(standPos, lookAt)
     else
-        -- BehindMob (Mặc định chuẩn nhất: khóa sát sau lưng quái 2.5 studs, cùng cao độ Y + Độ Cao Tùy Chỉnh)
-        local standXZ = Vector3.new(mobPos.X, 0, mobPos.Z) - mobFlatLook * distOffset
-        local safeY = getSafeStandingY(standXZ, mobPos.Y, activeMap)
-        local standPos = Vector3.new(standXZ.X, safeY, standXZ.Z)
-        local lookAt = Vector3.new(mobPos.X, mobPos.Y, mobPos.Z)
-        if (lookAt - standPos).Magnitude < 0.1 then lookAt = standPos + mobFlatLook end
+        -- GroundMelee, BehindMob, FrontMob
+        local standXZ = Vector3.new(mobPos.X, 0, mobPos.Z) + currentApproachDir * distOffset
+        local standPos = Vector3.new(standXZ.X, targetY, standXZ.Z)
+        local lookAt = Vector3.new(mobPos.X, targetY, mobPos.Z)
+        if (lookAt - standPos).Magnitude < 0.1 then
+            lookAt = standPos - currentApproachDir
+        end
         targetCFrame = CFrame.new(standPos, lookAt)
     end
 
@@ -1650,20 +1891,87 @@ trackConnection(RunService.Heartbeat:Connect(function()
         if dodgePos then
             local safeDodgeY = math.max(dodgePos.Y, getSafeStandingY(dodgePos, mobPos.Y, activeMap, 0))
             local finalDodge = Vector3.new(dodgePos.X, safeDodgeY, dodgePos.Z)
-            local lookAt = Vector3.new(mobPos.X, mobPos.Y, mobPos.Z)
+            local lookAt = Vector3.new(mobPos.X, safeDodgeY, mobPos.Z)
             if (lookAt - finalDodge).Magnitude < 0.1 then
                 lookAt = finalDodge + Vector3.new(0, 0, -1)
             end
             targetCFrame = CFrame.new(finalDodge, lookAt)
         end
 
-        root.CFrame = targetCFrame
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
+        local destPos = targetCFrame.Position
+        local currentPos = root.Position
+        local delta = destPos - currentPos
+        local dist = delta.Magnitude
+
+        local transitSpeed = math.clamp(tonumber(Config.GlideSpeed) or 25, 10, 80)
+        local hum = char:FindFirstChildOfClass("Humanoid")
+
+        if dist > 1.8 then
+            -- Tự động cưỡi Mount khi di chuyển cự ly xa (>12 studs) để tăng tốc độ di chuyển
+            if Config.AutoMount and dist > 12 then
+                setPlayerMounted(true)
+            end
+
+            -- [GIAI ĐOẠN 1: TIẾP CẬN MỤC TIÊU - VƯỢT VẬT CẢN (CÂY, ĐÁ, HÀNG RÀO) 100%]
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                end
+            end
+
+            if Config.MovementStyle == "Instant" then
+                -- Kiểu 1: Dịch chuyển tức thời
+                root.CFrame = targetCFrame
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            elseif Config.MovementStyle == "Walk" then
+                -- Kiểu 2: Chạy bộ tự nhiên (Humanoid Walk chuẩn physics, không CFrame snap)
+                if hum and hum.Health > 0 then
+                    hum.WalkSpeed = transitSpeed
+                    hum:MoveTo(destPos)
+                end
+                local lookTarget = Vector3.new(mobPos.X, root.Position.Y, mobPos.Z)
+                if (lookTarget - root.Position).Magnitude > 0.1 then
+                    root.CFrame = CFrame.new(root.Position, lookTarget)
+                end
+            else
+                -- Kiểu 3: Lướt mượt chuẩn Server (Glide - Mặc định: mượt mà, không giật lag, không bay bổng)
+                local dtClamped = math.clamp(dt, 0.001, 0.05)
+                local moveStep = math.min(dist, transitSpeed * dtClamped)
+                local moveDir = (dist > 0.001) and (delta / dist) or Vector3.new(0, 0, -1)
+                local nextPos = currentPos + moveDir * moveStep
+
+                local lookTarget = Vector3.new(mobPos.X, nextPos.Y, mobPos.Z)
+                if (lookTarget - nextPos).Magnitude > 0.1 then
+                    root.CFrame = CFrame.new(nextPos, lookTarget)
+                else
+                    root.CFrame = CFrame.new(nextPos)
+                end
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+
+                if hum and hum.Health > 0 then
+                    hum:MoveTo(destPos)
+                end
+            end
+        else
+            -- Khi đã áp sát quái: Tự động xuống Mount để sẵn sàng tung đòn đánh cận chiến
+            if Config.AutoMount and not Config.StayMountedCombat and isPlayerMounted() then
+                setPlayerMounted(false)
+            end
+
+            -- [GIAI ĐOẠN 2: KHÓA CHẶT CỰ LY ĐÁNH CẬN CHIẾN (<= 1.8 STUDS)]
+            root.CFrame = targetCFrame
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            if hum and hum.Health > 0 then
+                hum:MoveTo(root.Position)
+            end
+        end
     end
 end))
 
--- NoClip Thread: Chỉ tắt va chạm khi ĐANG KHÓA MỤC TIÊU SỐNG hoặc người chơi bật NoClip chủ động (chống rơi xuyên sàn khi chờ Wave)
+-- NoClip Thread: Giữ va chạm chân để nhân vật không rơi xuyên sàn làm server kích hoạt anti-void
 trackConnection(RunService.Stepped:Connect(function()
     local shouldNoClip = Config.NoClip or isActivelyLockingTarget
     if shouldNoClip and LocalPlayer.Character then
@@ -1682,17 +1990,71 @@ end))
 -- ========================================================================
 -- [8] COMBAT LOOPS: MELEE, SKILLS & ULTIMATE
 -- ========================================================================
--- 1. Auto Melee Punch Loop (Hỗ trợ Sub-Frame Multi-Packet Batching xuống tới 1ms)
+-- [8.0] ĐO LƯỜNG SỐ ĐÒN TRÚNG THỰC TẾ TỪ SERVER (HIT METRICS VIA HITFXREMOTE)
+local combatMetrics = {
+    hitsRecorded = 0,
+    hitsLastSecond = 0,
+    hitTimestamps = {}
+}
+
+if RemoteBank and RemoteBank.HitFXRemote then
+    pcall(function()
+        RemoteBank.HitFXRemote.OnClientEvent:Connect(function(attacker, fxType, hitList)
+            local myUserId = LocalPlayer and LocalPlayer.UserId
+            local isMe = (attacker == LocalPlayer)
+            if not isMe and typeof(attacker) == "Instance" then
+                isMe = (attacker:GetAttribute("OwnerUserId") == myUserId)
+            end
+            if isMe and type(hitList) == "table" and #hitList > 0 then
+                local now = tick()
+                table.insert(combatMetrics.hitTimestamps, now)
+                combatMetrics.hitsRecorded = combatMetrics.hitsRecorded + #hitList
+            end
+        end)
+    end)
+end
+
+-- Tính toán đòn trúng/giây theo cửa sổ trượt 1 giây
+task.spawn(function()
+    while isScriptRunning do
+        local now = tick()
+        local cutoff = now - 1.0
+        local valid = {}
+        for _, t in ipairs(combatMetrics.hitTimestamps) do
+            if t >= cutoff then
+                table.insert(valid, t)
+            end
+        end
+        combatMetrics.hitTimestamps = valid
+        combatMetrics.hitsLastSecond = #valid
+        task.wait(0.25)
+    end
+end)
+
+-- Tải module AttackClient gốc của game để kích hoạt animation vũ khí/vung kiếm chân thực
+local AttackClientModule = nil
+pcall(function()
+    local ps = LocalPlayer:FindFirstChildOfClass("PlayerScripts") or LocalPlayer:FindFirstChild("PlayerScripts")
+    local cl = ps and ps:FindFirstChild("ClientLoader")
+    local mods = cl and cl:FindFirstChild("Modules")
+    if mods and mods:FindFirstChild("AttackClient") then
+        AttackClientModule = require(mods.AttackClient)
+    end
+end)
+
+-- 1. Auto Melee Punch Loop (Đồng bộ nhịp chuẩn game và server, không xung đột packet)
 task.spawn(function()
     local lastTargetScan = 0
+    local isMeleeActiveInClient = false
     while isScriptRunning do
-        local delaySec = Config.PunchDelay or 0.015
+        local delaySec = Config.PunchDelay or 0.35
         local inInvasion = isInInvasion()
         local inMission = isInMission()
         local bountyActive = isBountyOverrideActive()
         local inInvasionAttack = inInvasion and Config.InvasionAutoFarm
-        local inMissionAttack = inMission and Config.AutoMissionFarm
+        local inMissionAttack = inMission and (Config.AutoMission or Config.AutoMissionFarm)
         local canPunch = Config.AutoPunch or inInvasionAttack or inMissionAttack or (bountyActive and Config.BountyAutoPunch)
+
         if canPunch then
             local now = tick()
             if not isValidCombatTarget(Config.TargetCurrent) or (now - lastTargetScan >= 0.15) then
@@ -1700,19 +2062,36 @@ task.spawn(function()
                 lastTargetScan = now
             end
 
-            -- Khi cài đặt < 16ms (vượt ngưỡng 1 frame 60FPS), tự động đóng gói nhiều đòn (Packet Batching)
-            local burstCount = 1
-            if delaySec < 0.016 then
-                burstCount = math.clamp(math.floor(0.016 / math.max(delaySec, 0.001)), 1, 16)
-            end
-
-            pcall(function()
-                for _ = 1, burstCount do
-                    RemoteBank.PunchRemote:Fire()
+            local target = Config.TargetCurrent
+            if isValidCombatTarget(target) then
+                if isPlayerMounted() then
+                    -- Khi đang trên thú cưỡi: Bắn thẳng PunchRemote để bypass bộ lọc chặn của AttackClient
+                    pcall(function()
+                        RemoteBank.PunchRemote:Fire()
+                    end)
+                elseif AttackClientModule and typeof(AttackClientModule.StartMelee) == "function" then
+                    if not isMeleeActiveInClient then
+                        isMeleeActiveInClient = true
+                        pcall(function() AttackClientModule.StartMelee() end)
+                    end
+                else
+                    pcall(function()
+                        RemoteBank.PunchRemote:Fire()
+                    end)
                 end
-            end)
+            else
+                if AttackClientModule and typeof(AttackClientModule.StopMelee) == "function" and isMeleeActiveInClient then
+                    isMeleeActiveInClient = false
+                    pcall(function() AttackClientModule.StopMelee() end)
+                end
+            end
+        else
+            if AttackClientModule and typeof(AttackClientModule.StopMelee) == "function" and isMeleeActiveInClient then
+                isMeleeActiveInClient = false
+                pcall(function() AttackClientModule.StopMelee() end)
+            end
         end
-        task.wait(math.max(delaySec, 0.001))
+        task.wait(math.max(delaySec, 0.05))
     end
 end)
 
@@ -1726,7 +2105,7 @@ task.spawn(function()
         local bountyActive = isBountyOverrideActive()
         local bountySkills = bountyActive and Config.BountyAutoSkills
         local inInvasionSkills = inInvasion and Config.InvasionAutoFarm and Config.InvasionAutoSkills
-        local inMissionSkills = inMission and Config.AutoMissionFarm and Config.MissionAutoSkills
+        local inMissionSkills = inMission and (Config.AutoMission or Config.AutoMissionFarm) and Config.MissionAutoSkills
         local canSkills = Config.AutoSkills or inInvasionSkills or inMissionSkills or bountySkills or questSkills
         if canSkills then
             local target = Config.TargetCurrent
@@ -1769,7 +2148,7 @@ task.spawn(function()
         local bountyActive = isBountyOverrideActive()
         local bountyUlt = bountyActive and Config.BountyAutoSkills
         local inInvasionUlt = inInvasion and Config.InvasionAutoFarm and Config.InvasionAutoSkills
-        local inMissionUlt = inMission and Config.AutoMissionFarm and Config.MissionAutoSkills
+        local inMissionUlt = inMission and (Config.AutoMission or Config.AutoMissionFarm) and Config.MissionAutoSkills
         local canUlt = (Config.AutoUltimate or inInvasionUlt or inMissionUlt or bountyUlt or questUlt) and canCastUltimate()
         if canUlt then
             local target = Config.TargetCurrent
@@ -2017,13 +2396,50 @@ task.spawn(function()
 end)
 
 -- 2. Luồng điều phối Auto Missions (Ưu Tiên Số 2: Tự động chạy khi Auto Bounty đã xong 10/10 hoặc đang tắt)
-local currentWaveInfo = {
+currentWaveInfo = {
     wave = 0,
     totalWaves = 0,
     enemiesAlive = 0,
     enemiesTotal = 0,
     title = ""
 }
+
+local function syncWaveInfoFromHUD()
+    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+    local inMissionUI = pGui and pGui:FindFirstChild("MainHUD")
+        and pGui.MainHUD:FindFirstChild("Missions")
+        and pGui.MainHUD.Missions:FindFirstChild("InMissionUI")
+    if inMissionUI and inMissionUI.Visible and inMissionUI:FindFirstChild("StatsFrame") then
+        local stats = inMissionUI.StatsFrame
+        if stats:FindFirstChild("Waves") and stats.Waves:FindFirstChild("NumberDisplay") then
+            local wText = tostring(stats.Waves.NumberDisplay.Text or "")
+            local curW, totW = wText:match("(%d+)/(%d+)")
+            if curW and totW then
+                currentWaveInfo.wave = tonumber(curW) or currentWaveInfo.wave
+                currentWaveInfo.totalWaves = tonumber(totW) or currentWaveInfo.totalWaves
+            elseif tonumber(wText) then
+                currentWaveInfo.wave = tonumber(wText) or currentWaveInfo.wave
+            end
+        end
+        if stats:FindFirstChild("Enemies") and stats.Enemies:FindFirstChild("NumberDisplay") then
+            local eText = tostring(stats.Enemies.NumberDisplay.Text or "")
+            local curE, totE = eText:match("(%d+)/(%d+)")
+            if curE and totE then
+                currentWaveInfo.enemiesAlive = tonumber(curE) or currentWaveInfo.enemiesAlive
+                currentWaveInfo.enemiesTotal = tonumber(totE) or currentWaveInfo.enemiesTotal
+            elseif tonumber(eText) then
+                currentWaveInfo.enemiesAlive = tonumber(eText) or currentWaveInfo.enemiesAlive
+            end
+        end
+        local details = inMissionUI:FindFirstChild("Details")
+        if details and details:FindFirstChild("Act") and details.Act:FindFirstChild("Title") then
+            local tText = tostring(details.Act.Title.Text or "")
+            if tText ~= "" then
+                currentWaveInfo.title = tText
+            end
+        end
+    end
+end
 
 if RemoteBank.MissionWaveUpdate and RemoteBank.MissionWaveUpdate.OnClientEvent then
     trackConnection(RemoteBank.MissionWaveUpdate.OnClientEvent:Connect(function(data)
@@ -2176,11 +2592,14 @@ task.spawn(function()
             end
         end
 
-        -- 2. Chỉ khởi chạy vào Phó Bản (Ưu Tiên 2) khi Auto Bounty & Auto Invasion không bận
+        -- 2. Khởi chạy Auto Challenge hoặc Phó Bản khi không bận Xâm Lược
         local bountyBusy = isBountyOverrideActive()
         local invSt = getInvasionStatus()
         local invBusy = Config.AutoInvasion and invSt.isActive
-        if Config.AutoMission and not bountyBusy and not invBusy and not isInMission() and not isInInvasion() then
+        if Config.AutoChallenge and not invBusy and not isInMission() and not isInInvasion() then
+            launchConfiguredChallenge()
+            task.wait(4.5)
+        elseif Config.AutoMission and not bountyBusy and not invBusy and not isInMission() and not isInInvasion() then
             launchConfiguredMission()
             task.wait(4.5)
         end
@@ -2202,17 +2621,33 @@ if RemoteBank.MissionComplete and RemoteBank.MissionComplete.OnClientEvent then
 end
 
 -- ========================================================================
--- [11] AUTO SUMMON / GACHA
+-- [11] AUTO SUMMON / GACHA & FLOATING TOGGLE
 -- ========================================================================
+local function doPullBanner(bannerName, count)
+    local targetBanner = "Standard Powers"
+    local bStr = tostring(bannerName or ""):lower()
+    if bStr:find("weapon") or bStr:find("kiếm") or bStr:find("vũ khí") then
+        targetBanner = "Standard Weapons"
+    else
+        targetBanner = "Standard Powers"
+    end
+
+    local num = tonumber(count) or 1
+    if num > 50 then num = 50 end
+    if num < 1 then num = 1 end
+
+    pcall(function()
+        if RemoteBank and RemoteBank.PullBanner then
+            RemoteBank.PullBanner:Fire(targetBanner, num)
+        end
+    end)
+end
+
 task.spawn(function()
     while isScriptRunning do
         if Config.AutoSummon then
             pcall(function()
-                if Config.SummonBanner == "Weapon Summon" then
-                    RemoteBank.SummonWeapon:Fire(Config.SummonCount)
-                else
-                    RemoteBank.PullBanner:Fire(Config.SummonBanner, Config.SummonCount)
-                end
+                doPullBanner(Config.SummonBanner, Config.SummonCount)
             end)
             task.wait(0.6)
         else
@@ -2220,6 +2655,235 @@ task.spawn(function()
         end
     end
 end)
+
+-- ========================================================================
+-- [11B] MERCHANT AUTO BUY (BOB E.O - TRAVELLING MERCHANT)
+-- ========================================================================
+local MerchantsModule
+pcall(function()
+    MerchantsModule = require(ReplicatedStorage.DataModules.Economy.Merchants)
+end)
+
+local function getMerchantStock()
+    if not MerchantsModule then
+        pcall(function()
+            MerchantsModule = require(ReplicatedStorage.DataModules.Economy.Merchants)
+        end)
+    end
+    if not MerchantsModule then return nil, 0, 0 end
+    local now = os.time()
+    local period = MerchantsModule.GetPeriod(now)
+    local timeLeft = MerchantsModule.GetTimeRemaining(now)
+    local ok, stock = pcall(MerchantsModule.RollStock, "Travelling Merchant", period)
+    if ok and type(stock) == "table" then
+        return stock, timeLeft, period
+    end
+    return nil, timeLeft, period
+end
+
+local function getRemainingSlotStock(slotData, slotIndex, period)
+    if not slotData then return 0 end
+    if slotData.Infinite then return 999999 end
+    local sold = 0
+    pcall(function()
+        if DataClient and typeof(DataClient.Get) == "function" then
+            local purchases = DataClient.Get("MerchantPurchases")
+            if type(purchases) == "table" and type(purchases["Travelling Merchant"]) == "table" then
+                local tm = purchases["Travelling Merchant"]
+                if slotData.Permanent then
+                    if type(tm.permanent) == "table" then
+                        sold = tonumber(tm.permanent[slotData.Item]) or 0
+                    end
+                elseif tm.period == period and type(tm.bought) == "table" then
+                    sold = tonumber(tm.bought[tostring(slotIndex)]) or 0
+                end
+            end
+        end
+    end)
+    return math.max(0, (slotData.Quantity or 0) - sold)
+end
+
+local function isItemSelectedForPurchase(itemName)
+    if not Config.SelectedShopItems or #Config.SelectedShopItems == 0 then
+        return false
+    end
+    local itemLower = tostring(itemName or ""):lower()
+    for _, sel in ipairs(Config.SelectedShopItems) do
+        local selStr = tostring(sel):lower()
+        if selStr:find("tất cả vật phẩm") or selStr:find("all items") then
+            return true
+        end
+        if selStr:find("tất cả quả sao") and itemLower:find("star fruit") then
+            return true
+        end
+        if itemLower == selStr or itemLower:find(selStr, 1, true) or selStr:find(itemLower, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+local function purchaseSelectedMerchantItems()
+    local stock, _timeLeft, period = getMerchantStock()
+    if not stock or #stock == 0 then return 0 end
+
+    local currentCoins = 0
+    pcall(function()
+        if DataClient and typeof(DataClient.Get) == "function" then
+            currentCoins = tonumber(DataClient.Get("Coins")) or 0
+        end
+        if currentCoins <= 0 and LocalPlayer:FindFirstChild("leaderstats") and LocalPlayer.leaderstats:FindFirstChild("Coins") then
+            currentCoins = tonumber(LocalPlayer.leaderstats.Coins.Value) or 0
+        end
+    end)
+
+    local totalPurchased = 0
+    for slotIndex, slotData in ipairs(stock) do
+        local itemName = tostring(slotData.Item or "")
+        if isItemSelectedForPurchase(itemName) then
+            local remaining = getRemainingSlotStock(slotData, slotIndex, period)
+            if remaining > 0 then
+                local unitPrice = tonumber(slotData.UnitPrice) or 0
+                local maxCanAfford = (unitPrice > 0) and math.floor(currentCoins / unitPrice) or remaining
+                local qtyToBuy = math.min(remaining, maxCanAfford)
+                if qtyToBuy > 0 then
+                    pcall(function()
+                        if RemoteBank and RemoteBank.MerchantPurchase then
+                            RemoteBank.MerchantPurchase:Fire("Travelling Merchant", slotIndex, qtyToBuy)
+                            totalPurchased = totalPurchased + qtyToBuy
+                            currentCoins = math.max(0, currentCoins - (qtyToBuy * unitPrice))
+                        end
+                    end)
+                    task.wait(0.2)
+                end
+            end
+        end
+    end
+    return totalPurchased
+end
+
+local function findBobEOModel()
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("Model") and (obj.Name:find("Bob") or obj.Name:find("Merchant")) then
+            return obj
+        end
+    end
+    return nil
+end
+
+task.spawn(function()
+    while isScriptRunning do
+        if Config.AutoBuyMerchant then
+            pcall(function()
+                purchaseSelectedMerchantItems()
+            end)
+            task.wait(3.0)
+        else
+            task.wait(1.5)
+        end
+    end
+end)
+
+-- UI Toggle Button Floating on Screen
+local floatingScreenGui
+local function setFloatingButtonVisible(visible)
+    if floatingScreenGui then
+        floatingScreenGui.Enabled = (visible ~= false)
+    end
+end
+
+local function createFloatingToggle(targetWindow)
+    pcall(function()
+        local parentGui
+        if typeof(gethui) == "function" then
+            parentGui = gethui()
+        else
+            local okCore, cg = pcall(function() return game:GetService("CoreGui") end)
+            if okCore and cg then
+                parentGui = cg
+            else
+                parentGui = LocalPlayer:WaitForChild("PlayerGui")
+            end
+        end
+
+        local existing = parentGui:FindFirstChild("HelmHubFloatingMenu")
+        if existing then existing:Destroy() end
+
+        floatingScreenGui = Instance.new("ScreenGui")
+        floatingScreenGui.Name = "HelmHubFloatingMenu"
+        floatingScreenGui.ResetOnSpawn = false
+        floatingScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+        local toggleBtn = Instance.new("TextButton")
+        toggleBtn.Name = "ToggleButton"
+        toggleBtn.Size = UDim2.new(0, 115, 0, 30)
+        toggleBtn.Position = UDim2.new(0.5, -57, 0, 8)
+        toggleBtn.BackgroundColor3 = Color3.fromRGB(15, 20, 28)
+        toggleBtn.BackgroundTransparency = 0.15
+        toggleBtn.Text = "✦ Helm MENU"
+        toggleBtn.TextColor3 = Color3.fromRGB(130, 225, 255)
+        toggleBtn.TextSize = 13
+        toggleBtn.Font = Enum.Font.GothamBold
+        toggleBtn.BorderSizePixel = 0
+        toggleBtn.Active = true
+        toggleBtn.AutoButtonColor = true
+        toggleBtn.Parent = floatingScreenGui
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 15)
+        corner.Parent = toggleBtn
+
+        local stroke = Instance.new("UIStroke")
+        stroke.Thickness = 1.2
+        stroke.Color = Color3.fromRGB(0, 170, 255)
+        stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        stroke.Parent = toggleBtn
+
+        -- Smooth Dragging Support
+        local dragging = false
+        local dragInput, dragStart, startPos
+        toggleBtn.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = input.Position
+                startPos = toggleBtn.Position
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then
+                        dragging = false
+                    end
+                end)
+            end
+        end)
+        toggleBtn.InputChanged:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+                dragInput = input
+            end
+        end)
+        UserInputService.InputChanged:Connect(function(input)
+            if input == dragInput and dragging then
+                local delta = input.Position - dragStart
+                toggleBtn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+            end
+        end)
+
+        -- Click toggle
+        toggleBtn.MouseButton1Click:Connect(function()
+            if targetWindow and targetWindow.Frame then
+                targetWindow.Frame.Visible = not targetWindow.Frame.Visible
+                if targetWindow.Frame.Visible then
+                    toggleBtn.TextColor3 = Color3.fromRGB(130, 225, 255)
+                    stroke.Color = Color3.fromRGB(0, 170, 255)
+                else
+                    toggleBtn.TextColor3 = Color3.fromRGB(180, 190, 205)
+                    stroke.Color = Color3.fromRGB(60, 75, 95)
+                end
+            end
+        end)
+
+        floatingScreenGui.Enabled = (Config.FloatingMenuButton ~= false)
+        floatingScreenGui.Parent = parentGui
+    end)
+end
 
 -- ========================================================================
 -- [12] GIAO DIỆN NGƯỜI DÙNG (NATIVE INVENTORY.LUA SECTORS)
@@ -2245,6 +2909,9 @@ if not Window then
     return
 end
 
+-- Khởi tạo nút On/Off Menu nổi trên màn hình
+createFloatingToggle(Window)
+
 -- ------------------------------------------------------------------------
 -- TAB 1: CHIẾN ĐẤU (COMBAT)
 -- ------------------------------------------------------------------------
@@ -2256,6 +2923,7 @@ local SecTarget = TabCombat:CreateSector("Mục Tiêu & Vị Trí", "right")
 local StatusMapLabel = SecAttack:AddLabel("Bản Đồ: Đang kiểm tra...", false)
 local StatusMobLabel = SecAttack:AddLabel("Quái Vật: 0 con", false)
 local StatusTargetLabel = SecAttack:AddLabel("Mục Tiêu: Chưa có", false)
+local StatusHitsLabel = SecAttack:AddLabel("Đòn Trúng Server: 0 đòn/s (Tổng: 0)", false)
 
 -- Cập nhật trạng thái thời gian thực
 task.spawn(function()
@@ -2291,6 +2959,14 @@ task.spawn(function()
             else
                 StatusTargetLabel:Set("Mục Tiêu: Chưa nhắm được mục tiêu")
             end
+
+            local hps = (combatMetrics and combatMetrics.hitsLastSecond) or 0
+            local totalHits = (combatMetrics and combatMetrics.hitsRecorded) or 0
+            if Config.AutoPunch or (isInMission() and Config.AutoMissionFarm) or (isInInvasion() and Config.InvasionAutoFarm) then
+                StatusHitsLabel:Set(string.format("Đòn Trúng Server: %d đòn/s (Tổng trúng: %d)", hps, totalHits))
+            else
+                StatusHitsLabel:Set(string.format("Đòn Trúng Server: Đang tắt (Tổng: %d)", totalHits))
+            end
         end)
         task.wait(0.5)
     end
@@ -2299,10 +2975,6 @@ end)
 pcall(function()
     SecAttack:AddToggle("Tự Động Đánh Thường (Auto Punch)", Config.AutoPunch, function(val)
         Config.AutoPunch = val
-    end)
-
-    SecAttack:AddSlider("Tốc Độ Đánh (ms)", 1, 15, 400, 1, function(val)
-        Config.PunchDelay = (tonumber(val) or 15) / 1000
     end)
 
     SecAttack:AddToggle("Tự Động Xả Kỹ Năng (Auto Skills)", Config.AutoSkills, function(val)
@@ -2400,7 +3072,7 @@ pcall(function()
     local isWorldDropdownReady = false
     local hadAllMobsSelected = true
 
-    local DropWorld = SecTarget:AddDropdown("Lọc Danh Sách Quái Theo World", {
+    local _DropWorld = SecTarget:AddDropdown("Lọc Danh Sách Quái Theo World", {
         "Tất Cả Thế Giới (All Worlds)",
         "Nemu's Village (Map 1)",
         "Hollow World (Map 2)",
@@ -2499,24 +3171,55 @@ pcall(function()
         end
     end)
 
-    SecTarget:AddDropdown("Chế Độ Nhắm Quái", { "Gần Nhất", "Máu Thấp Nhất", "Ưu Tiên Boss" }, "Gần Nhất", false, function(val)
-        if val and tostring(val):find("Máu Thấp") then
+    SecTarget:AddDropdown("Chế Độ Nhắm Quái", {
+        "Gần Nhất (Ưu Tiên Đánh Quái Ngay Cạnh - Chuẩn)",
+        "Máu Thấp Nhất (Lowest HP)",
+        "Ưu Tiên Boss (Boss First)"
+    }, "Gần Nhất (Ưu Tiên Đánh Quái Ngay Cạnh - Chuẩn)", false, function(val)
+        local s = tostring(val or "")
+        if s:find("Máu Thấp") or s:find("Lowest") then
             Config.TargetMode = "LowestHP"
-        elseif val and tostring(val):find("Boss") then
+        elseif s:find("Boss") then
             Config.TargetMode = "BossFirst"
         else
             Config.TargetMode = "Nearest"
         end
     end)
 
-    SecTarget:AddSlider("Phạm Vi Quét Quái Toàn Map (Studs)", 100, 2500, 5000, 10, function(val)
-        Config.ScanRange = tonumber(val) or 2500
+    SecTarget:AddSlider("Phạm Vi Quét Quái Toàn Map (Studs)", 100, 2500, 5000, 0, function(val)
+        Config.ScanRange = math.floor(tonumber(val) or 2500)
     end)
 
     SecTarget:AddToggle("Tự Động Giữ Vị Trí / Áp Sát (Auto Position)", Config.AutoPosition, function(val)
         Config.AutoPosition = val
         if not val then
             releaseCombatLock()
+        end
+    end)
+
+    SecTarget:AddSlider("⚡ Tốc Độ Di Chuyển / Tiếp Cận (Studs/s)", 10, 25, 80, 0, function(val)
+        Config.GlideSpeed = math.floor(tonumber(val) or 25)
+    end)
+
+    SecTarget:AddDropdown("🕹️ Kiểu Di Chuyển (Movement Style)", {
+        "Lướt Mượt Chuẩn Server (Glide - Mặc Định)",
+        "Chạy Bộ Tự Nhiên (Humanoid Walk)",
+        "Dịch Chuyển Tức Thời (Instant Teleport)"
+    }, "Lướt Mượt Chuẩn Server (Glide - Mặc Định)", false, function(val)
+        local s = tostring(val or "")
+        if s:find("Instant") or s:find("Tức Thời") then
+            Config.MovementStyle = "Instant"
+        elseif s:find("Walk") or s:find("Chạy Bộ") then
+            Config.MovementStyle = "Walk"
+        else
+            Config.MovementStyle = "Glide"
+        end
+    end)
+
+    SecTarget:AddToggle("🐎 Tự Động Cưỡi Mount Khi Di Chuyển Xa (Auto Mount)", Config.AutoMount, function(val)
+        Config.AutoMount = val
+        if not val and isPlayerMounted() and not Config.StayMountedCombat then
+            setPlayerMounted(false)
         end
     end)
 
@@ -2538,12 +3241,12 @@ pcall(function()
         end
     end)
 
-    SecTarget:AddSlider("Độ Cao Đứng Đánh Quái (Studs)", -5, 0, 20, 0.5, function(val)
-        Config.CombatHeightOffset = tonumber(val) or 0
+    SecTarget:AddSlider("Độ Cao Đứng Đánh Quái (Studs)", -5, 0, 20, 0, function(val)
+        Config.CombatHeightOffset = math.floor(tonumber(val) or 0)
     end)
 
-    SecTarget:AddSlider("Khoảng Cách Áp Sát Quái (Studs)", 0.5, 2.5, 10, 0.5, function(val)
-        Config.BehindDistance = tonumber(val) or 2.5
+    SecTarget:AddSlider("Khoảng Cách Áp Sát Quái (Studs)", 1, 1, 10, 0, function(val)
+        Config.BehindDistance = math.max(1, math.floor(tonumber(val) or 1))
     end)
 
     SecTarget:AddToggle("Đi Xuyên Vật Thể (NoClip)", Config.NoClip, function(val)
@@ -2555,360 +3258,200 @@ pcall(function()
 end)
 
 -- ------------------------------------------------------------------------
--- TAB 2: AUTO QUESTS (NHIỆM VỤ NPC CỐT TRUYỆN & MỞ KHÓA WORLD)
+-- TAB 2: (A) GAMEMODE (HỢP NHẤT TOÀN DIỆN: CHALLENGES + QUESTS + BOUNTY + INVASION + MISSIONS)
 -- ------------------------------------------------------------------------
 pcall(function()
-    local TabQuests = Window:CreateTab("Auto Quests")
-    local SecQuestMain = TabQuests:CreateSector("Tiến Độ & Mở Khóa Thế Giới (World)", "left")
-    local SecQuestActions = TabQuests:CreateSector("Cấu Hình Cốt Truyện & Thao Tác Nhanh", "right")
+    local TabActivities = Window:CreateTab("(A) Gamemode")
+    local SecActivities = TabActivities:CreateSector("Tiến Độ & Kích Hoạt (Status & Automation)", "left")
+    local SecConfig = TabActivities:CreateSector("Cấu Hình Gamemode Chạy Ngầm (Config)", "right")
 
-    local QuestPriorityStatusLabel = SecQuestMain:AddLabel("Ưu Tiên Đang Chạy: Đang kiểm tra...", false)
-    local QuestlineNameLabel = SecQuestMain:AddLabel("Cốt Truyện: Nemu's Village (World 1)", false)
-    local QuestlineStepLabel = SecQuestMain:AddLabel("Bước Hiện Tại: 1/6 (Chưa nhận)", false)
-    local QuestlineTargetLabel = SecQuestMain:AddLabel("Mục Tiêu Quái: Alien Scout (0/5)", false)
-    local QuestlineWorldLabel = SecQuestMain:AddLabel("Bản Đồ Cần Đến: Nemu's Village", false)
-    local QuestlineUnlockLabel = SecQuestMain:AddLabel("Mục Tiêu Mở Khóa: Hollow World (World 2)", false)
+    -- [CỘT TRÁI] TRẠNG THÁI TIẾN ĐỘ THỜI GIAN THỰC
+    local PrioStatusLabel = SecActivities:AddLabel("Ưu Tiên: Đang kiểm tra...", false)
+    local ChallengeStatusLabel = SecActivities:AddLabel("Thử Thách: Đang kiểm tra...", false)
+    local QuestlineLabel = SecActivities:AddLabel("Cốt Truyện: Đang kiểm tra...", false)
+    local BountyLabel = SecActivities:AddLabel("Bounty: Đang kiểm tra...", false)
+    local InvasionLabel = SecActivities:AddLabel("Invasion: Đang kiểm tra...", false)
+    local MissionStateLabel = SecActivities:AddLabel("Phó Bản: Đang ở sảnh / map", false)
+    local MissionWaveLabel = SecActivities:AddLabel("Wave: 0/0 | Quái: 0 con", false)
 
     task.spawn(function()
         while isScriptRunning do
             pcall(function()
+                -- 1. Ưu tiên hoạt động
                 local prioMode = getActivePriorityMode()
                 if prioMode == "Invasion" or prioMode == "InvasionCombat" then
-                    QuestPriorityStatusLabel:Set("⚡ Ưu Tiên: [0] AUTO INVASION (SỰ KIỆN)")
+                    PrioStatusLabel:Set("⚡ Ưu Tiên: [0] AUTO INVASION (SỰ KIỆN XÂM LƯỢC)")
+                elseif prioMode == "Challenge" then
+                    PrioStatusLabel:Set("🎯 Ưu Tiên: [1] AUTO CHALLENGES (DAILY / WEEKLY)")
                 elseif prioMode == "Mission" or prioMode == "MissionQueue" then
-                    QuestPriorityStatusLabel:Set("⚔️ Ưu Tiên: [1] AUTO MISSIONS (PHÓ BẢN)")
+                    PrioStatusLabel:Set("⚔️ Ưu Tiên: [2] AUTO MISSIONS (PHÓ BẢN)")
                 elseif prioMode == "Quest" then
-                    QuestPriorityStatusLabel:Set("🔥 Ưu Tiên: [2] AUTO QUESTS (CỐT TRUYỆN MỞ WORLD)")
+                    PrioStatusLabel:Set("🔥 Ưu Tiên: [3] AUTO QUESTS (CỐT TRUYỆN MỞ WORLD)")
                 elseif prioMode == "Bounty" then
-                    QuestPriorityStatusLabel:Set("📜 Ưu Tiên: [3] AUTO BOUNTY (TIỀN THƯỞNG)")
+                    PrioStatusLabel:Set("📜 Ưu Tiên: [4] AUTO BOUNTY (TIỀN THƯỞNG)")
                 else
-                    QuestPriorityStatusLabel:Set("🌍 Ưu Tiên: [4] CHIẾN ĐẤU THƯỜNG")
+                    PrioStatusLabel:Set("🌍 Ưu Tiên: [5] CHIẾN ĐẤU THƯỜNG TRONG MAP")
                 end
 
+                -- 2. Tiến độ Challenges (Daily & Weekly)
+                local cInfo = getChallengeInfo()
+                local dHours = math.floor(cInfo.dailyTime / 3600)
+                local dMins = math.floor((cInfo.dailyTime % 3600) / 60)
+                local dSecs = math.floor(cInfo.dailyTime % 60)
+
+                local wDays = math.floor(cInfo.weeklyTime / 86400)
+                local wHours = math.floor((cInfo.weeklyTime % 86400) / 3600)
+                local wMins = math.floor((cInfo.weeklyTime % 3600) / 60)
+
+                local dStatus = cInfo.dailyClaimed and "✅ Xong" or string.format("⏳ Còn %02d:%02d:%02d", dHours, dMins, dSecs)
+                local wStatus = cInfo.weeklyClaimed and "✅ Xong" or string.format("⏳ Còn %dd %02d:%02d", wDays, wHours, wMins)
+
+                ChallengeStatusLabel:Set(string.format("Thử Thách: Daily [%s] | Weekly [%s]", dStatus, wStatus))
+
+                -- 3. Tiến độ Quests cốt truyện
                 local qStatus = getQuestlineStatus()
                 if not qStatus then
-                    QuestlineNameLabel:Set("Cốt Truyện: Chưa tải dữ liệu")
-                    QuestlineStepLabel:Set("Bước Hiện Tại: ---")
-                    QuestlineTargetLabel:Set("Mục Tiêu Quái: ---")
-                    QuestlineWorldLabel:Set("Bản Đồ Cần Đến: ---")
-                    QuestlineUnlockLabel:Set("Mục Tiêu Mở Khóa: ---")
+                    QuestlineLabel:Set("Cốt Truyện: Chưa tải dữ liệu")
                 elseif qStatus.allCompleted or qStatus.state == "AllCompleted" then
-                    QuestlineNameLabel:Set("Cốt Truyện: 🎉 ĐÃ HOÀN TẤT TẤT CẢ QUESTLINE!")
-                    QuestlineStepLabel:Set("Tiến Độ: 6/6 Mọi World Đã Mở Khóa Thành Công")
-                    QuestlineTargetLabel:Set("Mục Tiêu Quái: Đã xong toàn bộ")
-                    QuestlineWorldLabel:Set("Bản Đồ Cần Đến: Đã mở hết tất cả World")
-                    QuestlineUnlockLabel:Set("Trạng Thái: ✅ Đã mở Hollow World & Demon Citadel")
+                    QuestlineLabel:Set("Cốt Truyện: 🎉 ĐÃ XONG TẤT CẢ! ĐÃ MỞ TOÀN BỘ WORLD")
                 elseif qStatus.state == "NeedAccept" then
-                    QuestlineNameLabel:Set(string.format("Cốt Truyện: %s (NPC: %s)", tostring(qStatus.questlineName or "?"), tostring(qStatus.npcName or "?")))
-                    QuestlineStepLabel:Set(string.format("Bước Hiện Tại: Bước %d/%d (Chưa Nhận - Sẵn Sàng Nhận)", qStatus.stepIndex or 1, qStatus.totalSteps or 6))
-                    QuestlineTargetLabel:Set(string.format("Mục Tiêu: Săn %s (%d/%d)", tostring(qStatus.targetEnemy or "?"), qStatus.progress or 0, qStatus.target or 1))
-                    QuestlineWorldLabel:Set(string.format("Bản Đồ Cần Đến: %s", tostring(qStatus.world or "?")))
-                    QuestlineUnlockLabel:Set(string.format("Mục Tiêu Mở Khóa: %s", tostring(qStatus.unlocksWorld or "Thế Giới Tiếp Theo")))
+                    QuestlineLabel:Set(string.format("Cốt Truyện: %s (Bước %d/%d) -> Tự nhận NPC %s",
+                        tostring(qStatus.questlineName or "?"), qStatus.stepIndex or 1, qStatus.totalSteps or 6, tostring(qStatus.npcName or "?")))
                 elseif qStatus.state == "ReadyToClaim" then
-                    QuestlineNameLabel:Set(string.format("Cốt Truyện: %s", tostring(qStatus.questlineName or "?")))
-                    QuestlineStepLabel:Set(string.format("Bước Hiện Tại: Bước %d/%d (ĐÃ ĐỦ QUÁI - SẴN SÀNG TRẢ)", qStatus.stepIndex or 1, qStatus.totalSteps or 6))
-                    QuestlineTargetLabel:Set("Mục Tiêu Quái: ✅ Đã hoàn thành! Đang trả nhiệm vụ...")
-                    QuestlineWorldLabel:Set(string.format("Bản Đồ: %s", tostring(qStatus.world or "?")))
-                    QuestlineUnlockLabel:Set(string.format("Mở Khóa Khi Xong: %s", tostring(qStatus.unlocksWorld or "Thế Giới Tiếp Theo")))
+                    QuestlineLabel:Set(string.format("Cốt Truyện: %s (Bước %d/%d) -> ✅ Đủ quái, tự trả thưởng",
+                        tostring(qStatus.questlineName or "?"), qStatus.stepIndex or 1, qStatus.totalSteps or 6))
                 else
-                    QuestlineNameLabel:Set(string.format("Cốt Truyện: %s", tostring(qStatus.questlineName or "?")))
-                    QuestlineStepLabel:Set(string.format("Bước Hiện Tại: Bước %d/%d (%s)", qStatus.stepIndex or 1, qStatus.totalSteps or 6, tostring(qStatus.stepTitle or "")))
-                    QuestlineTargetLabel:Set(string.format("Mục Tiêu Săn: %s (%d/%d)", tostring(qStatus.targetEnemy or "?"), qStatus.progress or 0, qStatus.target or 1))
-                    QuestlineWorldLabel:Set(string.format("Bản Đồ Cần Đến: %s", tostring(qStatus.world or "?")))
-                    QuestlineUnlockLabel:Set(string.format("Mục Tiêu Mở Khóa: %s", tostring(qStatus.unlocksWorld or "World Tiếp Theo")))
+                    QuestlineLabel:Set(string.format("Cốt Truyện: %s (B%d/%d) | Săn %s (%d/%d) @ %s",
+                        tostring(qStatus.questlineName or "?"), qStatus.stepIndex or 1, qStatus.totalSteps or 6,
+                        tostring(qStatus.targetEnemy or "?"), qStatus.progress or 0, qStatus.target or 1, tostring(qStatus.world or "?")))
+                end
+
+                -- 4. Tiến độ Bounty
+                local bStatus = getBountyTaskStatus()
+                if not bStatus then
+                    BountyLabel:Set("Bounty: Chưa tải dữ liệu")
+                elseif bStatus.completed or bStatus.state == "Completed" then
+                    BountyLabel:Set("Bounty: ✅ ĐÃ HOÀN TẤT 10/10 MỐC HÔM NAY")
+                elseif bStatus.state == "NeedAccept" then
+                    BountyLabel:Set(string.format("Bounty: Mốc %d/10 -> Chuẩn bị tự nhận", bStatus.position or 1))
+                else
+                    BountyLabel:Set(string.format("Bounty: Mốc %d/10 | Săn %s (%d/%d) @ %s",
+                        bStatus.position or 1, tostring(bStatus.enemy or "?"), bStatus.progress or 0, bStatus.target or 1, tostring(bStatus.world or "?")))
+                end
+
+                -- 5. Tiến độ Invasion
+                local invData = getInvasionData()
+                if invData.inInvasion then
+                    InvasionLabel:Set(string.format("Invasion: ĐANG DIỄN RA (%s) | Boss: %s HP: %d%%",
+                        tostring(invData.currentMap), tostring(invData.bossName or "Egris"), math.floor(invData.bossHpPct * 100)))
+                elseif invData.activeWorld and invData.activeWorld ~= "" then
+                    InvasionLabel:Set(string.format("Invasion: Cổng đang mở tại %s (Chuẩn bị vào)", tostring(invData.activeWorld)))
+                else
+                    InvasionLabel:Set("Invasion: Đang chờ sự kiện mở...")
+                end
+
+                -- 6. Tiến độ Phó Bản (Missions)
+                if isInMission() then
+                    pcall(syncWaveInfoFromHUD)
+                    local gm = LocalPlayer:GetAttribute("Gamemode") or Config.MissionGamemode or "Mission"
+                    local title = (currentWaveInfo.title ~= "" and currentWaveInfo.title) or getCurrentMapName()
+                    local waveCount = (currentWaveInfo.wave and currentWaveInfo.wave > 0) and currentWaveInfo.wave or 1
+                    local totalW = (currentWaveInfo.totalWaves and currentWaveInfo.totalWaves > 0) and currentWaveInfo.totalWaves or 10
+                    local livingMobs = #getAllEnemies()
+                    if livingMobs == 0 and currentWaveInfo.enemiesAlive and currentWaveInfo.enemiesAlive > 0 then
+                        livingMobs = currentWaveInfo.enemiesAlive
+                    end
+                    MissionStateLabel:Set(string.format("Phó Bản: [%s - %s]", tostring(gm), tostring(title)))
+                    MissionWaveLabel:Set(string.format("Wave: %d/%d | Quái Sống: %d con", waveCount, totalW, livingMobs))
+                else
+                    MissionStateLabel:Set("Phó Bản: Ngoài Thế Giới / Sảnh")
+                    MissionWaveLabel:Set(string.format("Quái Quanh Đây: %d con", #getAllEnemies()))
                 end
             end)
-            task.wait(0.5)
+            task.wait(0.6)
         end
     end)
 
-    SecQuestMain:AddToggle("🔥 Khởi Động Auto Quests (Làm Nhiệm Vụ Mở World)", Config.AutoQuest, function(val)
+    -- CÁC CÔNG TẮC KÍCH HOẠT CHÍNH (CỘT TRÁI)
+    SecActivities:AddToggle("🎯 Bật Auto Challenges (Daily, Weekly, Regular)", Config.AutoChallenge, function(val)
+        Config.AutoChallenge = val
+    end)
+
+    SecActivities:AddToggle("🔥 Bật Auto Quests (Làm Cốt Truyện Mở World)", Config.AutoQuest, function(val)
         Config.AutoQuest = val
-        if not val and not Config.AutoPosition and not (isInMission() and Config.AutoMissionFarm and Config.MissionAutoTeleport) and not Config.AutoBounty then
+        if not val and not Config.AutoPosition then
             releaseCombatLock()
         end
     end)
 
-    SecQuestMain:AddToggle("👑 Ưu Tiên Cao Hơn Auto Bounty (Mở World Trước)", Config.QuestPriorityOverBounty, function(val)
+    SecActivities:AddToggle("👑 Ưu Tiên Quests Hơn Bounty (Mở World Trước)", Config.QuestPriorityOverBounty, function(val)
         Config.QuestPriorityOverBounty = val
     end)
 
-    SecQuestMain:AddToggle("📍 Tự Động Tele Sang Đúng World Của Quái Nhiệm Vụ", Config.QuestAutoTeleportWorld, function(val)
-        Config.QuestAutoTeleportWorld = val
-    end)
-
-    SecQuestMain:AddToggle("🎯 Tự Động Tele Áp Sát Quái Nhiệm Vụ", Config.QuestAutoTeleport, function(val)
-        Config.QuestAutoTeleport = val
-        if not val and not Config.AutoPosition then
-            releaseCombatLock()
-        end
-    end)
-
-    SecQuestMain:AddToggle("🎁 Tự Động Nhận & Trả Thưởng Nhiệm Vụ (Auto Claim)", Config.QuestAutoClaim, function(val)
-        Config.QuestAutoClaim = val
-        Config.QuestAutoAccept = val
-    end)
-
-    SecQuestMain:AddToggle("✨ Tự Động Xả Kỹ Năng & Ulti Khi Đánh Quái Nhiệm Vụ", Config.QuestAutoSkills, function(val)
-        Config.QuestAutoSkills = val
-    end)
-
-    SecQuestActions:AddDropdown("Chọn Cốt Truyện Muốn Làm", {
-        "Tự Động (Theo Tiến Độ Cốt Truyện)",
-        "Nemu's Questline (World 1 -> Mở Hollow World)",
-        "Kisky's Questline (World 2 -> Mở Demon Citadel)",
-        "Sang Woo's Questline (World 3 - Demon Citadel)"
-    }, Config.QuestlineSelected, false, function(val)
-        Config.QuestlineSelected = val
-    end)
-
-    SecQuestActions:AddButton("📜 Nhận Nhiệm Vụ Ngay (Accept Questline)", function()
-        pcall(function()
-            local qStatus = getQuestlineStatus()
-            if qStatus and qStatus.questlineId then
-                if RemoteBank and RemoteBank.QuestAccept then
-                    RemoteBank.QuestAccept:Fire(qStatus.questlineId)
-                end
-                notify("Auto Quests", string.format("Đã gửi yêu cầu nhận nhiệm vụ %s!", tostring(qStatus.questlineId)), 3)
-            else
-                notify("Auto Quests", "Không tìm thấy nhiệm vụ khả dụng để nhận!", 3)
-            end
-        end)
-    end)
-
-    SecQuestActions:AddButton("🎁 Nhận Thưởng / Mở Khóa World (Claim Reward)", function()
-        pcall(function()
-            local qStatus = getQuestlineStatus()
-            if qStatus and qStatus.questlineId then
-                if RemoteBank and RemoteBank.QuestClaimReward then
-                    RemoteBank.QuestClaimReward:Fire(qStatus.questlineId)
-                end
-                notify("Auto Quests", string.format("Đã gửi yêu cầu nhận thưởng & mở khóa %s!", tostring(qStatus.questlineId)), 3)
-            else
-                notify("Auto Quests", "Không tìm thấy nhiệm vụ khả dụng để nhận thưởng!", 3)
-            end
-        end)
-    end)
-
-    SecQuestActions:AddButton("🚶 Dịch Chuyển Tới NPC Của Nhiệm Vụ Này", function()
-        pcall(function()
-            local qStatus = getQuestlineStatus()
-            if qStatus and (qStatus.npcName or qStatus.questlineId) then
-                local npcModel = getQuestNPCModel(qStatus.npcName, qStatus.questlineId)
-                local char = LocalPlayer.Character
-                local root = char and char:FindFirstChild("HumanoidRootPart")
-                if npcModel and root then
-                    local nRoot = npcModel:FindFirstChild("HumanoidRootPart") or npcModel.PrimaryPart or npcModel:FindFirstChildWhichIsA("BasePart")
-                    if nRoot then
-                        releaseCombatLock()
-                        root.CFrame = nRoot.CFrame + (nRoot.CFrame.LookVector * 3) + Vector3.new(0, 1, 0)
-                        root.AssemblyLinearVelocity = Vector3.zero
-                        for _, p in ipairs(npcModel:GetDescendants()) do
-                            if p:IsA("ProximityPrompt") and typeof(fireproximityprompt) == "function" then
-                                fireproximityprompt(p)
-                                break
-                            end
-                        end
-                        notify("Auto Quests", string.format("Đã dịch chuyển tới NPC %s!", tostring(npcModel.Name)), 3)
-                        return
-                    end
-                end
-                notify("Auto Quests", string.format("Chưa tìm thấy NPC %s trong map hiện tại!", tostring(qStatus.npcName or "Quest")), 3)
-            else
-                notify("Auto Quests", "Chưa có thông tin NPC của nhiệm vụ!", 3)
-            end
-        end)
-    end)
-
-    SecQuestActions:AddButton("🌍 Dịch Chuyển Tới Map Của Quái Nhiệm Vụ", function()
-        pcall(function()
-            local qStatus = getQuestlineStatus()
-            if qStatus and qStatus.world and qStatus.world ~= "" then
-                releaseCombatLock()
-                Config.TargetCurrent = nil
-                if RemoteBank and RemoteBank.Teleport then
-                    RemoteBank.Teleport:Fire(qStatus.world)
-                elseif MapClient and typeof(MapClient.RequestTeleport) == "function" then
-                    MapClient.RequestTeleport(qStatus.world)
-                end
-                notify("Auto Quests", string.format("Đang dịch chuyển tới %s để làm nhiệm vụ!", tostring(qStatus.world)), 3)
-            else
-                notify("Auto Quests", "Chưa xác định được World của nhiệm vụ hiện tại!", 3)
-            end
-        end)
-    end)
-
-    SecQuestActions:AddButton("📌 Ghim Hiển Thị Nhiệm Vụ Lên Màn Hình (Track)", function()
-        pcall(function()
-            local qStatus = getQuestlineStatus()
-            if qStatus and qStatus.questlineId and RemoteBank.QuestSetTracked then
-                RemoteBank.QuestSetTracked:Fire("Questline", qStatus.questlineId)
-                notify("Auto Quests", string.format("Đã ghim %s lên màn hình!", tostring(qStatus.questlineId)), 3)
-            else
-                notify("Auto Quests", "Không thể ghim nhiệm vụ lúc này!", 3)
-            end
-        end)
-    end)
-
-    SecQuestActions:AddButton("💎 Nhận Toàn Bộ Thưởng Quest (Dailies/Weeklies)", function()
-        pcall(function()
-            claimAllQuests()
-            notify("Auto Quests", "Đã gửi lệnh nhận toàn bộ phần thưởng nhiệm vụ ngày & tuần!", 3)
-        end)
-    end)
-end)
-
--- ------------------------------------------------------------------------
--- TAB 3: AUTO BOUNTY (ƯU TIÊN SỐ 1: TỰ NHẬN -> TELE ĐÚNG MAP -> SĂN ĐÚNG QUÁI -> TỰ TRẢ)
--- ------------------------------------------------------------------------
-pcall(function()
-    local TabBounty = Window:CreateTab("Auto Bounty")
-    local SecBountyMain = TabBounty:CreateSector("Khởi Động & Tiến Độ Auto Bounty", "left")
-    local SecBountyActions = TabBounty:CreateSector("Điều Khiển & Thao Tác Nhanh", "right")
-
-    local PriorityStatusLabel = SecBountyMain:AddLabel("Ưu Tiên Đang Chạy: Đang kiểm tra...", false)
-    local BountyStepLabel = SecBountyMain:AddLabel("Tiến Độ Bounty: 0/10", false)
-    local BountyTargetLabel = SecBountyMain:AddLabel("Mục Tiêu Bounty: Chưa có", false)
-    local BountyWorldLabel = SecBountyMain:AddLabel("Bản Đồ Săn: Chưa xác định", false)
-
-    task.spawn(function()
-        while isScriptRunning do
-            pcall(function()
-                local prioMode = getActivePriorityMode()
-                if prioMode == "Invasion" or prioMode == "InvasionCombat" then
-                    PriorityStatusLabel:Set("⚡ Ưu Tiên Đang Chạy: [0] AUTO INVASION (SỰ KIỆN)")
-                elseif prioMode == "Bounty" then
-                    PriorityStatusLabel:Set("🔥 Ưu Tiên Đang Chạy: [1] AUTO BOUNTY")
-                elseif prioMode == "Mission" or prioMode == "MissionQueue" then
-                    PriorityStatusLabel:Set("⚔️ Ưu Tiên Đang Chạy: [2] AUTO MISSIONS")
-                else
-                    PriorityStatusLabel:Set("🌍 Ưu Tiên Đang Chạy: [3] CHIẾN ĐẤU THƯỜNG")
-                end
-
-                local bStatus = getBountyTaskStatus()
-                if not bStatus then
-                    BountyStepLabel:Set("Tiến Độ Bounty: Chưa tải dữ liệu / Chưa nhận")
-                    BountyTargetLabel:Set("Mục Tiêu Bounty: Chưa có")
-                    BountyWorldLabel:Set("Bản Đồ Săn: ---")
-                elseif bStatus.completed or bStatus.state == "Completed" then
-                    BountyStepLabel:Set("Tiến Độ Bounty: ✅ ĐÃ HOÀN TẤT 10/10 HÔM NAY")
-                    BountyTargetLabel:Set("Mục Tiêu Bounty: Đã xong toàn bộ (Nhường cho Missions/World)")
-                    BountyWorldLabel:Set("Bản Đồ Săn: Hoàn thành")
-                elseif bStatus.state == "NeedAccept" then
-                    BountyStepLabel:Set(string.format("Tiến Độ Bounty: %d/10 (Chưa Nhận - Sẵn sàng nhận)", bStatus.position or 1))
-                    BountyTargetLabel:Set(string.format("Mục Tiêu Sắp Tới: %s (0/%d)", tostring(bStatus.enemy or "?"), bStatus.target or 1))
-                    BountyWorldLabel:Set(string.format("Bản Đồ Săn: %s", tostring(bStatus.world or "?")))
-                else
-                    BountyStepLabel:Set(string.format("Tiến Độ Bounty: Mốc %d/%d (Đã nhận)", bStatus.position or 1, bStatus.total or 10))
-                    BountyTargetLabel:Set(string.format("Mục Tiêu Săn: %s (%d/%d)", tostring(bStatus.enemy or "?"), bStatus.progress or 0, bStatus.target or 1))
-                    BountyWorldLabel:Set(string.format("Bản Đồ Săn: %s", tostring(bStatus.world or "?")))
-                end
-            end)
-            task.wait(0.5)
-        end
-    end)
-
-    SecBountyMain:AddToggle("🔥 Khởi Động Auto Bounty (Ưu Tiên Số 1)", Config.AutoBounty, function(val)
+    SecActivities:AddToggle("📜 Bật Auto Bounty (Săn Tiền Thưởng 10 Mốc/Ngày)", Config.AutoBounty, function(val)
         Config.AutoBounty = val
-        if not val and not Config.AutoPosition and not (isInMission() and Config.AutoMissionFarm and Config.MissionAutoTeleport) then
-            releaseCombatLock()
-        end
-    end)
-
-    SecBountyMain:AddToggle("📍 Tự Động Tele Sang Map & Áp Sát Quái Bounty", Config.BountyAutoTeleport, function(val)
-        Config.BountyAutoTeleport = val
         if not val and not Config.AutoPosition then
             releaseCombatLock()
         end
     end)
 
-    SecBountyMain:AddToggle("✨ Tự Động Xả Kỹ Năng & Ulti Khi Săn Bounty", Config.BountyAutoSkills, function(val)
-        Config.BountyAutoSkills = val
+    SecActivities:AddToggle("⚡ Bật Auto Invasion (Tự Động Đi Khi Mở Sự Kiện)", Config.AutoInvasion, function(val)
+        Config.AutoInvasion = val
     end)
 
-    SecBountyActions:AddButton("📜 Nhận Nhiệm Vụ Bounty Ngay (Accept Bounty)", function()
-        pcall(function()
-            if RemoteBank.BountyAccept then
-                RemoteBank.BountyAccept:Fire(nil)
-            end
-        end)
-        notify("Auto Bounty", "Đã gửi lệnh nhận nhiệm vụ Bounty!", 3)
-    end)
-
-    SecBountyActions:AddButton("🎁 Nhận Thưởng Mốc Bounty Hiện Tại (Claim Bounty)", function()
-        pcall(function()
-            if RemoteBank.BountyClaim then
-                RemoteBank.BountyClaim:Fire(nil)
-            end
-        end)
-        notify("Auto Bounty", "Đã gửi lệnh nhận thưởng mốc Bounty!", 3)
-    end)
-
-    SecBountyActions:AddButton("🚀 Dịch Chuyển Ngay Tới Map Của Quái Bounty", function()
-        local bStatus = getBountyTaskStatus()
-        if bStatus and bStatus.world and bStatus.world ~= "" then
-            releaseCombatLock()
-            Config.TargetCurrent = nil
-            pcall(function()
-                if RemoteBank and RemoteBank.Teleport then
-                    RemoteBank.Teleport:Fire(bStatus.world)
-                elseif MapClient and typeof(MapClient.RequestTeleport) == "function" then
-                    MapClient.RequestTeleport(bStatus.world)
-                end
-            end)
-            notify("Auto Bounty", string.format("Đang dịch chuyển tới %s để săn %s!", tostring(bStatus.world), tostring(bStatus.enemy or "Bounty")), 3)
+    SecActivities:AddToggle("⚔️ Bật Auto Missions (Tự Vào Phó Bản / Dungeons)", Config.AutoMission, function(val)
+        Config.AutoMission = val
+        if val then
+            Config.AutoMissionFarm = true
+            Config.MissionAutoTeleport = true
         else
-            notify("Auto Bounty", "Chưa tìm thấy thông tin Map của nhiệm vụ Bounty hiện tại!", 3)
+            if not Config.AutoPosition then
+                releaseCombatLock()
+            end
         end
     end)
 
-    SecBountyActions:AddButton("📌 Ghim Hiển Thị Bounty Lên Màn Hình (Track)", function()
-        pcall(function()
-            local bStatus = getBountyTaskStatus()
-            local pos = (bStatus and bStatus.position) or 1
-            if RemoteBank.QuestSetTracked then
-                RemoteBank.QuestSetTracked:Fire("Bounty", pos)
-            end
-        end)
-        notify("Auto Bounty", "Đã ghim nhiệm vụ Bounty lên màn hình!", 3)
-    end)
-end)
-
--- ------------------------------------------------------------------------
--- TAB 3: AUTO MISSIONS (ƯU TIÊN SỐ 2: MISSIONS + AUTO FARM PHÓ BẢN + AUTO DODGE)
--- ------------------------------------------------------------------------
-pcall(function()
-    local TabMissions = Window:CreateTab("Auto Missions")
-    local SecMissionSetup = TabMissions:CreateSector("Khởi Động & Cấu Hình Missions", "left")
-    local SecMissionCombat = TabMissions:CreateSector("Auto Farm Phó Bản & Auto Dodge Riêng", "right")
-
-    -- [CỘT TRÁI] KHỞI ĐỘNG & CẤU HÌNH PHÓ BẢN
-    SecMissionSetup:AddToggle("🔥 Khởi Động Auto Missions (Start Auto Missions)", Config.AutoMission, function(val)
-        Config.AutoMission = val
+    SecActivities:AddToggle("💥 Tự Động Đánh Quái Trong Phó Bản (Mission Farm)", Config.AutoMissionFarm, function(val)
+        Config.AutoMissionFarm = val
+        if not val and not Config.AutoPosition then
+            releaseCombatLock()
+        end
     end)
 
-    SecMissionSetup:AddToggle("🔄 Tự Động Chơi Lại / Đi Tiếp Khi Xong (Auto Replay)", Config.AutoReplayMission, function(val)
+    SecActivities:AddToggle("🔄 Tự Động Chơi Lại / Đi Tiếp Khi Xong (Auto Replay)", Config.AutoReplayMission, function(val)
         Config.AutoReplayMission = val
     end)
 
-    SecMissionSetup:AddButton("🚀 Vào Ngay Phó Bản Đã Chọn (Launch Now)", function()
-        launchConfiguredMission()
-        notify("Auto Missions", "Đã gửi lệnh vào Phó Bản!", 3)
+    SecActivities:AddToggle("🛡️ Tự Động Né Chiêu Boss / Vùng Đỏ (Auto Dodge)", Config.AutoDodge, function(val)
+        Config.AutoDodge = val
+        if not val then
+            Config.IsCurrentlyDodging = false
+        end
     end)
 
-    SecMissionSetup:AddButton("🚪 Thoát Phó Bản Về Map Ngay (Leave Mission)", function()
+    SecActivities:AddButton("💎 Nhận Toàn Bộ Thưởng 1-Chạm (Quests, Bounty, Pass, Milestones)", function()
         pcall(function()
-            if RemoteBank.MissionDecision then
-                RemoteBank.MissionDecision:Fire("Return")
+            claimAllQuests()
+            claimAllLevelMilestones()
+            claimAllAchievements()
+            if RemoteBank and RemoteBank.BountyClaim then
+                RemoteBank.BountyClaim:Fire(nil)
             end
-            if RemoteBank.MissionReturn then
-                RemoteBank.MissionReturn:Fire()
+            if RemoteBank and RemoteBank.ClaimDailyReward then
+                RemoteBank.ClaimDailyReward:Fire()
             end
+            if RemoteBank and RemoteBank.ClaimGroupReward then
+                RemoteBank.ClaimGroupReward:Fire()
+            end
+            if RemoteBank and RemoteBank.BattlepassClaimAll then
+                RemoteBank.BattlepassClaimAll:Fire()
+            end
+            notify("Nhận Thưởng", "Đã gửi toàn bộ yêu cầu nhận thưởng Quests, Milestones, Achievements & Pass!", 4)
         end)
-        notify("Auto Missions", "Đã gửi lệnh rời khỏi Phó Bản!", 3)
     end)
 
-    SecMissionSetup:AddDropdown("Chế Độ Phó Bản (Gamemode)", {
+    -- [CỘT PHẢI] CẤU HÌNH TỰ ĐỘNG HÓA CHẠY NGẦM 100%
+    SecConfig:AddDropdown("Chế Độ Phó Bản (Gamemode)", {
         "Mission (Cốt Truyện & EX Stage)",
         "Challenge (Regular / Daily / Weekly)",
         "Gauntlet (Tháp Thử Thách Chamber 1-10)",
@@ -2926,11 +3469,31 @@ pcall(function()
         end
     end)
 
-    SecMissionSetup:AddDropdown("Chọn Thế Giới (World)", { "Nemu's Village", "Hollow World", "Demon Citadel" }, "Nemu's Village", false, function(val)
+    SecConfig:AddDropdown("Chọn Loại Challenge Muốn Đi", {
+        "Tất Cả (Daily -> Weekly -> Regular)",
+        "Daily Challenge (2500 Gems + 10 Rerolls)",
+        "Weekly Challenge (5000 Gems + 50 Rerolls)",
+        "Regular Challenge (Slot 1)",
+        "Regular Challenge (Slot 2)",
+        "Regular Challenge (Slot 3)"
+    }, Config.ChallengeSelectedTier, false, function(val)
+        Config.ChallengeSelectedTier = val
+    end)
+
+    SecConfig:AddDropdown("Chọn Cốt Truyện Muốn Làm", {
+        "Tự Động (Theo Tiến Độ Cốt Truyện)",
+        "Nemu's Questline (World 1 -> Mở Hollow World)",
+        "Kisky's Questline (World 2 -> Mở Demon Citadel)",
+        "Sang Woo's Questline (World 3 - Demon Citadel)"
+    }, Config.QuestlineSelected, false, function(val)
+        Config.QuestlineSelected = val
+    end)
+
+    SecConfig:AddDropdown("Chọn Thế Giới Phó Bản (World)", { "Nemu's Village", "Hollow World", "Demon Citadel" }, "Nemu's Village", false, function(val)
         Config.MissionWorld = tostring(val or "Nemu's Village")
     end)
 
-    SecMissionSetup:AddDropdown("Chọn Màn (Act 1-3 & Act 4 EX)", {
+    SecConfig:AddDropdown("Chọn Màn (Act 1-3 & Act 4 EX)", {
         "Act 1",
         "Act 2",
         "Act 3",
@@ -2939,35 +3502,15 @@ pcall(function()
         Config.MissionAct = tonumber(tostring(val):match("%d+")) or 1
     end)
 
-    SecMissionSetup:AddDropdown("Độ Khó (Mode)", { "Normal", "Hard" }, "Normal", false, function(val)
+    SecConfig:AddDropdown("Độ Khó (Mode)", { "Normal", "Hard" }, "Normal", false, function(val)
         Config.MissionMode = tostring(val or "Normal")
     end)
 
-    SecMissionSetup:AddDropdown("Loại Challenge (Khi chọn Challenge)", {
-        "Regular Challenge (Slot 1)",
-        "Regular Challenge (Slot 2)",
-        "Regular Challenge (Slot 3)",
-        "Daily Challenge",
-        "Weekly Challenge"
-    }, "Regular Challenge (Slot 1)", false, function(val)
-        local s = tostring(val or "")
-        if s:find("Daily") then
-            Config.ChallengeTier = "Daily"
-            Config.ChallengeSlot = 1
-        elseif s:find("Weekly") then
-            Config.ChallengeTier = "Weekly"
-            Config.ChallengeSlot = 1
-        else
-            Config.ChallengeTier = "Regular"
-            Config.ChallengeSlot = tonumber(s:match("%d+")) or 1
-        end
-    end)
-
-    SecMissionSetup:AddSlider("Tầng Gauntlet (Chamber 1 - 10)", 1, 1, 10, 0, function(val)
+    SecConfig:AddSlider("Tầng Gauntlet (Chamber 1 - 10)", 1, 1, 10, 0, function(val)
         Config.GauntletChamber = math.clamp(math.floor(tonumber(val) or 1), 1, 10)
     end)
 
-    SecMissionSetup:AddDropdown("Hành Động Khi Xong Màn", {
+    SecConfig:AddDropdown("Hành Động Khi Xong Màn", {
         "Chơi Lại Màn Cũ (Retry)",
         "Đi Tiếp Màn Mới (Next)",
         "Thoát Ra Ngoài Map (Return)"
@@ -2982,197 +3525,18 @@ pcall(function()
         end
     end)
 
-    -- [CỘT PHẢI] AUTO FARM QUÁI PHÓ BẢN & AUTO DODGE ĐỘC LẬP
-    local MissionStateLabel = SecMissionCombat:AddLabel("Trạng Thái: Đang kiểm tra...", false)
-    local MissionWaveLabel = SecMissionCombat:AddLabel("Wave: 0/0 | Quái Sống: 0", false)
-    local MissionDodgeLabel = SecMissionCombat:AddLabel("Né Chiêu (Auto Dodge): Đang tắt", false)
-
-    task.spawn(function()
-        while isScriptRunning do
-            pcall(function()
-                if isInMission() then
-                    local gm = LocalPlayer:GetAttribute("Gamemode") or Config.MissionGamemode or "Mission"
-                    local title = (currentWaveInfo.title ~= "" and currentWaveInfo.title) or getCurrentMapName()
-                    MissionStateLabel:Set(string.format("Trạng Thái: ĐANG TRONG MÀN [%s - %s]", tostring(gm), tostring(title)))
-                    MissionWaveLabel:Set(string.format("Wave: %d/%d | Quái Còn Sống: %d/%d",
-                        currentWaveInfo.wave or 0,
-                        currentWaveInfo.totalWaves or 0,
-                        currentWaveInfo.enemiesAlive or #getAllEnemies(),
-                        currentWaveInfo.enemiesTotal or #getAllEnemies()
-                    ))
-                else
-                    MissionStateLabel:Set("Trạng Thái: Đang ở ngoài Thế Giới / Lobby")
-                    MissionWaveLabel:Set(string.format("Quái Quanh Đây: %d con", #getAllEnemies()))
-                end
-
-                if Config.IsCurrentlyDodging then
-                    MissionDodgeLabel:Set("⚡ CẢNH BÁO: ĐANG NÉ VÙNG ĐỎ BOSS!")
-                else
-                    MissionDodgeLabel:Set(Config.AutoDodge and "Né Chiêu: Đang bật bảo vệ (An toàn)" or "Né Chiêu: Đang tắt")
-                end
-            end)
-            task.wait(0.4)
-        end
-    end)
-
-    -- Nhóm 1: Auto Farm Quái Phó Bản (Tách riêng Đánh, Tele & Tùy Chỉnh Độ Cao / Khoảng Cách)
-    SecMissionCombat:AddToggle("⚔️ Tự Động Đánh Quái Phó Bản (Auto Farm Mission)", Config.AutoMissionFarm, function(val)
-        Config.AutoMissionFarm = val
-        if not val and not Config.AutoPosition then
-            releaseCombatLock()
-        end
-    end)
-
-    SecMissionCombat:AddToggle("📍 Tự Động Tele Tới Quái Phó Bản (Mission Teleport)", Config.MissionAutoTeleport, function(val)
-        Config.MissionAutoTeleport = val
-        if not val and not Config.AutoPosition then
-            releaseCombatLock()
-        end
-    end)
-
-    SecMissionCombat:AddToggle("✨ Tự Xả Kỹ Năng & Ulti Trong Phó Bản (Mission Skills)", Config.MissionAutoSkills, function(val)
-        Config.MissionAutoSkills = val
-    end)
-
-    SecMissionCombat:AddDropdown("Kiểu Áp Sát Quái Phó Bản", {
-        "Khóa Sau Lưng Quái (Chuẩn Nhất)",
-        "Đứng Dưới Đất Đánh (Ground Melee)",
-        "Khóa Trước Mặt Quái",
-        "Treo Trên Đầu Quái (Hover)"
-    }, "Khóa Sau Lưng Quái (Chuẩn Nhất)", false, function(val)
-        local s = tostring(val or "")
-        if s:find("Đất") or s:find("Ground") then
-            Config.PositionMode = "GroundMelee"
-        elseif s:find("Trước Mặt") then
-            Config.PositionMode = "FrontMob"
-        elseif s:find("Trên Đầu") or s:find("Hover") then
-            Config.PositionMode = "HoverAbove"
-        else
-            Config.PositionMode = "BehindMob"
-        end
-    end)
-
-    SecMissionCombat:AddSlider("Độ Cao Đánh Quái Phó Bản (Studs)", -5, 0, 20, 0.5, function(val)
-        Config.CombatHeightOffset = tonumber(val) or 0
-    end)
-
-    SecMissionCombat:AddSlider("Khoảng Cách Đứng Đánh Phó Bản (Studs)", 0.5, 2.5, 10, 0.5, function(val)
-        Config.BehindDistance = tonumber(val) or 2.5
-    end)
-
-    -- Nhóm 2: Auto Dodge (Né Chiêu Vùng Đỏ - Độc lập hoàn toàn)
-    SecMissionCombat:AddToggle("🛡️ Tự Động Né Chiêu Boss / Vùng Đỏ (Auto Dodge)", Config.AutoDodge, function(val)
-        Config.AutoDodge = val
-        if not val then
-            Config.IsCurrentlyDodging = false
-        end
-    end)
-
-    SecMissionCombat:AddDropdown("Kiểu Né Chiêu (Dodge Mode)", {
-        "Kết Hợp Né Ngang + Nhảy Cao (Smart Hybrid)",
-        "Né Ngang Ra Ngoài Vùng Đỏ (Sidestep)",
-        "Nhảy Vọt Lên Cao >16 Studs (Sky Evade)"
-    }, "Kết Hợp Né Ngang + Nhảy Cao (Smart Hybrid)", false, function(val)
-        local s = tostring(val or "")
-        if s:find("Sidestep") or s:find("Né Ngang Ra") then
-            Config.DodgeMode = "Sidestep"
-        elseif s:find("Sky") or s:find("Nhảy Vọt") then
-            Config.DodgeMode = "SkyEvade"
-        else
-            Config.DodgeMode = "SmartHybrid"
-        end
-    end)
-
-    SecMissionCombat:AddSlider("Khoảng Cách Né An Toàn (Studs)", 3, 6, 15, 1, function(val)
-        Config.DodgeMargin = tonumber(val) or 6
-    end)
-end)
-
--- ------------------------------------------------------------------------
--- TAB 4: AUTO INVASION (SỰ KIỆN XÂM LƯỢC THẾ GIỚI & SĂN BOSS EGRIS)
--- ------------------------------------------------------------------------
-pcall(function()
-    local TabInvasion = Window:CreateTab("Auto Invasion")
-    local SecInvasionInfo = TabInvasion:CreateSector("Tiến Độ & Trạng Thái Xâm Lược", "left")
-    local SecInvasionCombat = TabInvasion:CreateSector("Tự Động Chiến Đấu & Săn Boss", "right")
-
-    local InvStatusLabel = SecInvasionInfo:AddLabel("Trạng Thái: Đang kiểm tra...", false)
-    local InvWorldLabel = SecInvasionInfo:AddLabel("Bản Đồ Xâm Lược: Chưa có", false)
-    local InvCountdownLabel = SecInvasionInfo:AddLabel("Đồng Hồ: 00:00", false)
-    local InvBarLabel = SecInvasionInfo:AddLabel("Thanh Tiến Độ: [░░░░░░░░░░] 0%", false)
-    local InvBossLabel = SecInvasionInfo:AddLabel("Boss Đợt Này: Egris (Shadow Monarch)", false)
-    local InvDailyLabel = SecInvasionInfo:AddLabel("Giới Hạn Ngày: Gems 0/10,000 | Reroll 0/100", false)
-    local InvRewardsLabel = SecInvasionInfo:AddLabel("Phần Thưởng: Shadow's Grasp (2%) | 1000 Gems | 5 Rerolls", false)
-
-    task.spawn(function()
-        while isScriptRunning do
-            pcall(function()
-                local st = getInvasionStatus()
-                if st.isActive then
-                    local mm = math.floor(st.timeLeft / 60)
-                    local ss = math.floor(st.timeLeft % 60)
-                    InvStatusLabel:Set(string.format("🔥 ĐANG DIỄN RA TẠI [%s]!", tostring(st.activeWorld or "World")))
-                    InvWorldLabel:Set(string.format("Bản Đồ Xâm Lược: %s", tostring(st.activeWorld or "---")))
-                    InvCountdownLabel:Set(string.format("Thời Gian Còn Lại: %02d:%02d", mm, ss))
-                    local pct = math.floor(st.timeRatio * 100)
-                    local filled = math.clamp(math.floor(pct / 10), 0, 10)
-                    local bar = string.rep("█", filled) .. string.rep("░", 10 - filled)
-                    InvBarLabel:Set(string.format("Thời Gian Còn: [%s] %d%%", bar, pct))
-                else
-                    local mm = math.floor(st.timeUntilNext / 60)
-                    local ss = math.floor(st.timeUntilNext % 60)
-                    InvStatusLabel:Set(string.format("⏳ Sắp Diễn Ra: Invasion in %02d:%02d", mm, ss))
-                    InvWorldLabel:Set("Bản Đồ Xâm Lược: Đang chờ mở đợt tiếp theo")
-                    InvCountdownLabel:Set(string.format("Đếm Ngược Mở: %02d:%02d (%d phút nữa)", mm, ss, mm))
-                    local pct = math.floor(st.nextRatio * 100)
-                    local filled = math.clamp(math.floor(pct / 10), 0, 10)
-                    local bar = string.rep("█", filled) .. string.rep("░", 10 - filled)
-                    InvBarLabel:Set(string.format("Invasion in: [%s] %d%%", bar, pct))
-                end
-
-                InvDailyLabel:Set(string.format("Giới Hạn Ngày: Gems %s/%s | Rerolls %s/%s",
-                    Format and Format.formatWithCommas and Format.formatWithCommas(st.gems.received) or tostring(st.gems.received),
-                    Format and Format.formatWithCommas and Format.formatWithCommas(st.gems.max) or tostring(st.gems.max),
-                    tostring(st.rerolls.received),
-                    tostring(st.rerolls.max)
-                ))
-            end)
-            task.wait(1.0)
-        end
-    end)
-
-    SecInvasionInfo:AddToggle("🔥 Tự Động Tham Gia Khi Có Invasion (Auto Join)", Config.AutoInvasion, function(val)
-        Config.AutoInvasion = val
-    end)
-
-    SecInvasionInfo:AddToggle("🔄 Dừng Khi Đạt Giới Hạn Ngày (10k Gems & 100 Rerolls)", Config.InvasionFarmUntilCap, function(val)
-        Config.InvasionFarmUntilCap = val
-    end)
-
-    SecInvasionInfo:AddDropdown("Thế Giới Ưu Tiên Tham Gia", {
-        "Tự Động (Theo Server)",
-        "Nemu's Village",
-        "Demon Citadel",
-        "Hollow World"
-    }, "Tự Động (Theo Server)", false, function(val)
-        Config.InvasionPreferredWorld = tostring(val or "Tự Động (Theo Server)")
-    end)
-
-    SecInvasionInfo:AddButton("🚀 Vào Ngay Invasion Hiện Tại (Launch Now)", function()
-        local st = getInvasionStatus()
-        local targetWorld = st.activeWorld or (Config.InvasionPreferredWorld ~= "Tự Động (Theo Server)" and Config.InvasionPreferredWorld) or "Nemu's Village"
+    SecConfig:AddButton("🚀 Vào Ngay Hoạt Động Đã Chọn (Launch Now)", function()
         pcall(function()
-            if RemoteBank.MissionLaunch then
-                RemoteBank.MissionLaunch:Fire({
-                    gamemode = "Invasion",
-                    world = targetWorld
-                })
+            if Config.MissionGamemode == "Challenge" then
+                launchConfiguredChallenge()
+            else
+                launchConfiguredMission()
             end
+            notify("Gamemode", "Đã gửi lệnh vào Hoạt Động / Phó Bản!", 3)
         end)
-        notify("Auto Invasion", string.format("Đang gửi lệnh vào Invasion tại %s!", tostring(targetWorld)), 3)
     end)
 
-    SecInvasionInfo:AddButton("🚪 Thoát Khỏi Invasion Về Lobby (Leave)", function()
+    SecConfig:AddButton("🚪 Thoát Hoạt Động Về Map Ngay (Leave Mission)", function()
         pcall(function()
             if RemoteBank.MissionDecision then
                 RemoteBank.MissionDecision:Fire("Return")
@@ -3180,141 +3544,270 @@ pcall(function()
             if RemoteBank.MissionReturn then
                 RemoteBank.MissionReturn:Fire()
             end
+            notify("Gamemode", "Đã gửi lệnh rời khỏi Hoạt Động!", 3)
         end)
-        notify("Auto Invasion", "Đã gửi lệnh rời khỏi Invasion!", 3)
     end)
 
-    -- CỘT PHẢI: CHIẾN ĐẤU & PHÁ TOTEM
-    local InvTargetLabel = SecInvasionCombat:AddLabel("Mục Tiêu Hiện Tại: Chưa vào trận", false)
+    SecConfig:AddToggle("📍 Tự Động Tele Sang Đúng World Của Quái", Config.QuestAutoTeleportWorld, function(val)
+        Config.QuestAutoTeleportWorld = val
+    end)
+
+    SecConfig:AddToggle("🎯 Tự Động Tele Áp Sát Quái Nhiệm Vụ & Phó Bản", Config.QuestAutoTeleport, function(val)
+        Config.QuestAutoTeleport = val
+        Config.BountyAutoTeleport = val
+        Config.InvasionAutoTeleport = val
+        Config.MissionAutoTeleport = val
+        if not val and not Config.AutoPosition then
+            releaseCombatLock()
+        end
+    end)
+
+    SecConfig:AddToggle("🎁 Tự Động Nhận & Trả Thưởng Nhiệm Vụ (Auto Claim)", Config.QuestAutoClaim, function(val)
+        Config.QuestAutoClaim = val
+        Config.QuestAutoAccept = val
+    end)
+
+    SecConfig:AddToggle("✨ Tự Động Xả Kỹ Năng & Chiêu Cuối (Auto Skills)", Config.QuestAutoSkills, function(val)
+        Config.QuestAutoSkills = val
+        Config.BountyAutoSkills = val
+        Config.InvasionAutoSkills = val
+        Config.MissionAutoSkills = val
+    end)
+
+    SecConfig:AddToggle("🛑 Dừng Invasion Khi Đạt Giới Hạn Ngày (Cap 10k Gems)", Config.InvasionFarmUntilCap, function(val)
+        Config.InvasionFarmUntilCap = val
+    end)
+end)
+
+-- TAB 4: GACHA & BUY (QUAY THẺ GACHA & CỬA HÀNG MERCHANT BOB E.O)
+-- ------------------------------------------------------------------------
+pcall(function()
+    local TabGachaBuy = Window:CreateTab("Gacha & Buy")
+    local SecGacha = TabGachaBuy:CreateSector("Gacha & Banner (Summon)", "left")
+    local SecMerchant = TabGachaBuy:CreateSector("Cửa Hàng Merchant (Bob E.O)", "right")
+
+    -- [CỘT TRÁI] GACHA & BANNER
+    local GemsLabel = SecGacha:AddLabel("Tài Nguyên: Đang kiểm tra...", false)
+
     task.spawn(function()
         while isScriptRunning do
             pcall(function()
-                if isInInvasion() then
-                    local cur = Config.TargetCurrent
-                    if cur and cur.Parent then
-                        local isTotem = cur.Name:lower():find("totem")
-                        local isBoss = cur.Name:lower():find("egris")
-                        if isBoss then
-                            InvTargetLabel:Set("⚔️ ĐANG DIỆT BOSS: EGRIS (Shadow Monarch)!")
-                        elseif isTotem then
-                            InvTargetLabel:Set("💥 ĐANG PHÁ TOTEM: " .. cur.Name)
-                        else
-                            InvTargetLabel:Set("🎯 Mục Tiêu: " .. cur.Name)
-                        end
-                    else
-                        InvTargetLabel:Set("🔍 Đang tìm Totem / Boss Egris...")
-                    end
-                else
-                    InvTargetLabel:Set("Trạng Thái: Đang ở ngoài (Sẵn sàng chiến đấu)")
+                local gems = 0
+                if DataClient and typeof(DataClient.Get) == "function" then
+                    gems = tonumber(DataClient.Get("Gems")) or 0
                 end
+                if gems <= 0 and LocalPlayer:FindFirstChild("leaderstats") and LocalPlayer.leaderstats:FindFirstChild("Gems") then
+                    gems = tonumber(LocalPlayer.leaderstats.Gems.Value) or 0
+                end
+                GemsLabel:Set(string.format("💎 Gems Hiện Có: %s", Format and Format.formatWithCommas and Format.formatWithCommas(gems) or tostring(gems)))
             end)
-            task.wait(0.5)
+            task.wait(1.5)
         end
     end)
 
-    SecInvasionCombat:AddToggle("⚔️ Tự Động Phá Totem & Diệt Boss (Auto Farm Invasion)", Config.InvasionAutoFarm, function(val)
-        Config.InvasionAutoFarm = val
-        if not val and not Config.AutoPosition then
-            releaseCombatLock()
-        end
-    end)
-
-    SecInvasionCombat:AddToggle("📍 Tự Động Teleport Tới Totem & Boss Egris", Config.InvasionAutoTeleport, function(val)
-        Config.InvasionAutoTeleport = val
-        if not val and not Config.AutoPosition then
-            releaseCombatLock()
-        end
-    end)
-
-    SecInvasionCombat:AddToggle("✨ Tự Xả Kỹ Năng & Chiêu Cuối (Invasion Skills)", Config.InvasionAutoSkills, function(val)
-        Config.InvasionAutoSkills = val
-    end)
-
-    SecInvasionCombat:AddDropdown("Khoảng Cách Đứng Đánh Totem/Boss", {
-        "2.5 Studs (Hitbox Đánh Thường Chuẩn)",
-        "3.0 Studs (Cự Ly An Toàn)",
-        "5.0 Studs (Tầm Xa Kỹ Năng)"
-    }, "2.5 Studs (Hitbox Đánh Thường Chuẩn)", false, function(val)
-        local s = tostring(val or "")
-        Config.BehindDistance = tonumber(s:match("%d+%.?%d*")) or 2.5
-    end)
-
-    SecInvasionCombat:AddDropdown("Khi Xong Trận Invasion", {
-        "Thoát Về World Làm Nhiệm Vụ & Chờ Đợt Sau",
-        "Đứng Chờ Đợt Tiếp Theo Tại Lobby"
-    }, "Thoát Về World Làm Nhiệm Vụ & Chờ Đợt Sau", false, function(val)
-        local s = tostring(val or "")
-        if s:find("Lobby") then
-            Config.InvasionDecisionType = "LobbyWait"
-        else
-            Config.InvasionDecisionType = "WaitNext"
-        end
-    end)
-end)
-
--- ------------------------------------------------------------------------
--- TAB 5: NHẶT ĐỒ & QUAY THẺ (LOOT MAGNET & GACHA SUMMON)
--- ------------------------------------------------------------------------
-pcall(function()
-    local TabSummon = Window:CreateTab("Nhặt Đồ & Quay Thẻ")
-    local SecMagnet = TabSummon:CreateSector("Hút Vật Phẩm & Tiền Tệ", "left")
-    local SecSummon = TabSummon:CreateSector("Gacha & Banner", "right")
-
-    SecMagnet:AddToggle("Hút Vật Phẩm & Tiền Tệ Vô Hạn (Infinite Magnet)", Config.AutoMagnet, function(val)
-        Config.AutoMagnet = val
-    end)
-
-    SecMagnet:AddButton("⚡ Hút Ngay Lập Tức Toàn Bộ Đồ Trên Bản Đồ", function()
-        pcall(forceSweepDrops)
-        notify("Hút Vật Phẩm", "Đang quét và gom sạch mọi vật phẩm rơi trên bản đồ!", 3)
-    end)
-
-    SecSummon:AddToggle("Tự Động Quay Thẻ (Auto Summon)", Config.AutoSummon, function(val)
+    SecGacha:AddToggle("Tự Động Quay Thẻ (Auto Summon)", Config.AutoSummon, function(val)
         Config.AutoSummon = val
     end)
 
-    SecSummon:AddDropdown("Chọn Banner Quay", { "Standard Powers", "Special Powers", "Weapon Summon" }, "Standard Powers", false, function(val)
-        Config.SummonBanner = tostring(val or "Standard Powers")
+    SecGacha:AddDropdown("Chọn Banner Quay", {
+        "Standard Powers (Kỹ Năng)",
+        "Standard Weapons (Vũ Khí/Kiếm)"
+    }, "Standard Powers (Kỹ Năng)", false, function(val)
+        local s = tostring(val or ""):lower()
+        if s:find("weapon") or s:find("vũ khí") or s:find("kiếm") then
+            Config.SummonBanner = "Standard Weapons"
+        else
+            Config.SummonBanner = "Standard Powers"
+        end
     end)
 
-    SecSummon:AddDropdown("Số Lượng Quay", { "1x Lần", "10x Lần" }, "1x Lần", false, function(val)
-        Config.SummonCount = (val and tostring(val):find("10x")) and 10 or 1
+    SecGacha:AddDropdown("Số Lượng Quay", {
+        "1x Lần (50 Gems)",
+        "10x Lần (500 Gems)",
+        "50x Lần (Max Summon - 2500 Gems)"
+    }, "1x Lần (50 Gems)", false, function(val)
+        local s = tostring(val or "")
+        if s:find("50x") then
+            Config.SummonCount = 50
+        elseif s:find("10x") then
+            Config.SummonCount = 10
+        else
+            Config.SummonCount = 1
+        end
+    end)
+
+    SecGacha:AddButton("✨ Quay Thẻ Ngay (Summon Now)", function()
+        pcall(function()
+            doPullBanner(Config.SummonBanner, Config.SummonCount)
+            notify("Gacha Summon", string.format("Đã gửi lệnh quay %s (x%d lượt)!", tostring(Config.SummonBanner), tonumber(Config.SummonCount) or 1), 3)
+        end)
+    end)
+
+    -- [CỘT PHẢI] CỬA HÀNG MERCHANT (BOB E.O) & AUTO BUY
+    local RestockLabel = SecMerchant:AddLabel("Đổi Hàng: Đang tính...", false)
+    local CoinsLabel = SecMerchant:AddLabel("Tiền Yen: Đang kiểm tra...", false)
+    local StockSummaryLabel = SecMerchant:AddLabel("Hàng Trong Shop: Đang tải...", false)
+
+    task.spawn(function()
+        while isScriptRunning do
+            pcall(function()
+                local stock, timeLeft, period = getMerchantStock()
+                if timeLeft and timeLeft > 0 then
+                    local hh = math.floor(timeLeft / 3600)
+                    local mm = math.floor((timeLeft % 3600) / 60)
+                    local ss = math.floor(timeLeft % 60)
+                    RestockLabel:Set(string.format("⏳ Shop Restock Sau: %02d:%02d:%02d", hh, mm, ss))
+                else
+                    RestockLabel:Set("⏳ Shop Restock: Vừa làm mới hàng!")
+                end
+
+                local coins = 0
+                if DataClient and typeof(DataClient.Get) == "function" then
+                    coins = tonumber(DataClient.Get("Coins")) or 0
+                end
+                if coins <= 0 and LocalPlayer:FindFirstChild("leaderstats") and LocalPlayer.leaderstats:FindFirstChild("Coins") then
+                    coins = tonumber(LocalPlayer.leaderstats.Coins.Value) or 0
+                end
+                CoinsLabel:Set(string.format("🪙 Tiền (Yen): %s", Format and Format.formatWithCommas and Format.formatWithCommas(coins) or tostring(coins)))
+
+                if stock and #stock > 0 then
+                    local summary = {}
+                    for i, sl in ipairs(stock) do
+                        local rem = getRemainingSlotStock(sl, i, period)
+                        if rem > 0 then
+                            table.insert(summary, string.format("%s (%d)", sl.Item, rem))
+                        end
+                    end
+                    if #summary > 0 then
+                        StockSummaryLabel:Set("Hàng Còn: " .. table.concat(summary, ", "))
+                    else
+                        StockSummaryLabel:Set("Hàng Còn: Đã bán hết toàn bộ!")
+                    end
+                else
+                    StockSummaryLabel:Set("Hàng Trong Shop: Chưa mở kho hàng")
+                end
+            end)
+            task.wait(1.5)
+        end
+    end)
+
+    SecMerchant:AddToggle("🛒 Tự Động Mua Hàng Merchant (Auto Buy)", Config.AutoBuyMerchant, function(val)
+        Config.AutoBuyMerchant = val
+    end)
+
+    SecMerchant:AddDropdown("Chọn Vật Phẩm Cần Mua (Multi-Select)", {
+        "[Tất Cả Vật Phẩm (All Items)]",
+        "Trait Rerolls",
+        "Stat Cubes",
+        "Stat Prisms",
+        "Weapon Rerolls",
+        "Souls",
+        "Pure Cloud",
+        "Chief Toad",
+        "Star Fruit (Tất Cả Quả Sao)",
+        "Star Fruit [Rainbow]",
+        "Star Fruit [Yellow]",
+        "Star Fruit [Green]",
+        "Star Fruit [Red]",
+        "Star Fruit [Blue]",
+        "Star Fruit [Pink]",
+        "Star Fruit [Dead]"
+    }, Config.SelectedShopItems, true, function(val)
+        if typeof(val) == "table" then
+            Config.SelectedShopItems = val
+        elseif typeof(val) == "string" then
+            Config.SelectedShopItems = { val }
+        end
+    end)
+
+    SecMerchant:AddButton("🛍️ Mua Ngay Các Vật Phẩm Đã Chọn (Buy Selected Now)", function()
+        pcall(function()
+            local bought = purchaseSelectedMerchantItems()
+            notify("Merchant Shop", string.format("Đã gửi lệnh mua %d vật phẩm đã chọn!", bought), 3)
+        end)
+    end)
+
+    SecMerchant:AddButton("🚶 Dịch Chuyển Tới Bob E.O (Teleport to Bob E.O)", function()
+        pcall(function()
+            local bob = findBobEOModel()
+            local char = LocalPlayer.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if bob and root then
+                local bRoot = bob:FindFirstChild("HumanoidRootPart") or bob.PrimaryPart or bob:FindFirstChildWhichIsA("BasePart")
+                if bRoot then
+                    releaseCombatLock()
+                    root.CFrame = bRoot.CFrame + (bRoot.CFrame.LookVector * 3.5) + Vector3.new(0, 1, 0)
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    notify("Merchant", "Đã dịch chuyển tới trước mặt Bob E.O!", 3)
+                    return
+                end
+            end
+            notify("Merchant", "Không tìm thấy NPC Bob E.O trong map này (Bob E.O ở Lobby)!", 3)
+        end)
     end)
 end)
 
 -- ------------------------------------------------------------------------
--- TAB 4: TIỆN ÍCH & MÃ QUÀ TẶNG (MISC & CODES)
+-- TAB 5: TIỆN ÍCH & NHẬN THƯỞNG (MISC & SYSTEM)
 -- ------------------------------------------------------------------------
 pcall(function()
     local TabMisc = Window:CreateTab("Tiện Ích")
-    local SecCodes = TabMisc:CreateSector("Mã Quà Tặng & Nhận Thưởng", "left")
-    local SecSystem = TabMisc:CreateSector("Hệ Thống & Tối Ưu", "right")
+    local SecCodes = TabMisc:CreateSector("Nhận Thưởng & Menu", "left")
+    local SecSystem = TabMisc:CreateSector("Hệ Thống, Tối Ưu & Kết Nối", "right")
 
-    SecCodes:AddButton("Nhập Tất Cả Code (Redeem All Codes)", function()
-        local codes = { "EARLYACCESS", "EARLYACCESS+", "CONTENTCREATOR" }
-        local redeemed = 0
-        for _, c in ipairs(codes) do
-            pcall(function()
-                RemoteBank.RedeemCode:Fire(c)
-                redeemed = redeemed + 1
-            end)
-            task.wait(0.3)
-        end
-        notify("Redeem Codes", string.format("Đã gửi %d mã quà tặng!", redeemed), 4)
+    SecCodes:AddButton("💎 Nhận Toàn Bộ Thưởng 1-Chạm (Daily / Group / Pass / Quests / Milestones)", function()
+        pcall(function()
+            claimAllQuests()
+            claimAllLevelMilestones()
+            claimAllAchievements()
+            if RemoteBank and RemoteBank.ClaimDailyReward then RemoteBank.ClaimDailyReward:Fire() end
+            if RemoteBank and RemoteBank.ClaimGroupReward then RemoteBank.ClaimGroupReward:Fire() end
+            if RemoteBank and RemoteBank.BattlepassClaimAll then RemoteBank.BattlepassClaimAll:Fire() end
+            if RemoteBank and RemoteBank.BountyClaim then RemoteBank.BountyClaim:Fire(nil) end
+        end)
+        notify("Nhận Thưởng", "Đã gửi toàn bộ yêu cầu nhận thưởng Quests, Milestones, Achievements & Pass!", 3)
     end)
 
-    SecCodes:AddButton("Nhận Toàn Bộ Thưởng (Daily / Group / Pass / Quests)", function()
+    SecCodes:AddToggle("Nút Bật/Tắt Menu Nổi (Floating Button)", Config.FloatingMenuButton ~= false, function(val)
+        Config.FloatingMenuButton = val
+        setFloatingButtonVisible(val)
+    end)
+
+    SecCodes:AddButton("Ẩn / Hiện Giao Diện Menu (Toggle GUI)", function()
+        if Window and Window.Frame then
+            Window.Frame.Visible = not Window.Frame.Visible
+        end
+    end)
+
+    SecCodes:AddButton("🐎 Bật / Tắt Thú Cưỡi Ngay (Toggle Mount)", function()
         pcall(function()
-            if RemoteBank.ClaimDailyReward then RemoteBank.ClaimDailyReward:Fire() end
-            if RemoteBank.ClaimGroupReward then RemoteBank.ClaimGroupReward:Fire() end
-            if RemoteBank.BattlepassClaimAll then RemoteBank.BattlepassClaimAll:Fire() end
-            if RemoteBank.QuestClaimReward then
-                for qId = 1, 30 do
-                    RemoteBank.QuestClaimReward:Fire(qId)
-                end
+            if RemoteBank and RemoteBank.MountToggle then
+                RemoteBank.MountToggle:Fire()
             end
         end)
-        notify("Nhận Thưởng", "Đã gửi toàn bộ yêu cầu nhận thưởng!", 3)
+    end)
+
+    SecSystem:AddToggle("⚡ Tùy Chỉnh Tốc Độ Player (Custom WalkSpeed)", Config.CustomPlayerSpeedEnabled, function(val)
+        Config.CustomPlayerSpeedEnabled = val
+        pcall(function()
+            local speed = val and (Config.PlayerWalkSpeed or 26) or 16
+            LocalPlayer:SetAttribute("WalkSpeed", speed)
+            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+                LocalPlayer.Character:FindFirstChildOfClass("Humanoid").WalkSpeed = speed
+            end
+        end)
+    end)
+
+    SecSystem:AddSlider("🏃 Tốc Độ Chạy Player (WalkSpeed)", 12, 26, 80, 0, function(val)
+        Config.PlayerWalkSpeed = math.floor(tonumber(val) or 26)
+        if Config.CustomPlayerSpeedEnabled then
+            pcall(function()
+                LocalPlayer:SetAttribute("WalkSpeed", Config.PlayerWalkSpeed)
+                if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+                    LocalPlayer.Character:FindFirstChildOfClass("Humanoid").WalkSpeed = Config.PlayerWalkSpeed
+                end
+            end)
+        end
     end)
 
     SecSystem:AddToggle("Chạy Nhanh Liên Tục (Always Sprint)", Config.AlwaysSprint, function(val)
@@ -3328,17 +3821,28 @@ pcall(function()
         end)
     end)
 
-    -- Duy trì tốc độ di chuyển nếu bật AlwaysSprint
+    -- Duy trì tốc độ di chuyển nếu bật CustomPlayerSpeedEnabled hoặc AlwaysSprint
     trackConnection(RunService.Heartbeat:Connect(function()
-        if Config.AlwaysSprint and LocalPlayer.Character then
+        if LocalPlayer.Character then
             local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-            if hum and hum.WalkSpeed < 26 then
-                hum.WalkSpeed = 28
+            if hum and hum.Health > 0 then
+                if Config.CustomPlayerSpeedEnabled then
+                    local targetSpd = math.clamp(tonumber(Config.PlayerWalkSpeed) or 26, 12, 100)
+                    if hum.WalkSpeed ~= targetSpd and not isActivelyLockingTarget then
+                        hum.WalkSpeed = targetSpd
+                        LocalPlayer:SetAttribute("WalkSpeed", targetSpd)
+                    end
+                elseif Config.AlwaysSprint then
+                    if hum.WalkSpeed < 26 and not isActivelyLockingTarget then
+                        hum.WalkSpeed = 28
+                        LocalPlayer:SetAttribute("WalkSpeed", 28)
+                    end
+                end
             end
         end
     end))
 
-    SecSystem:AddToggle("Chống Văng Game (Anti-AFK)", Config.AntiAFK, function(val)
+    SecSystem:AddToggle("Chống Văng Game Khi Treo Máy (Anti-AFK)", Config.AntiAFK, function(val)
         Config.AntiAFK = val
     end)
 
@@ -3353,17 +3857,51 @@ pcall(function()
         end
     end))
 
-    SecSystem:AddButton("Tối Ưu Hóa FPS (Boost FPS)", function()
+    SecSystem:AddButton("🚀 Tối Ưu Hóa FPS Tối Đa (Super FPS Boost)", function()
         pcall(function()
+            local lighting = game:GetService("Lighting")
+            lighting.GlobalShadows = false
+            lighting.FogEnd = 9e9
+            for _, v in ipairs(lighting:GetChildren()) do
+                if v:IsA("PostProcessEffect") or v:IsA("BlurEffect") or v:IsA("SunRaysEffect") or v:IsA("ColorCorrectionEffect") or v:IsA("BloomEffect") or v:IsA("DepthOfFieldEffect") then
+                    v.Enabled = false
+                end
+            end
             for _, v in ipairs(game:GetDescendants()) do
                 if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Sparkles") then
                     v.Enabled = false
-                elseif v:IsA("Lighting") then
-                    v.GlobalShadows = false
+                elseif v:IsA("Explosion") then
+                    v.Visible = false
                 end
             end
         end)
-        notify("Tối Ưu FPS", "Đã giảm tải hiệu ứng hạt và bóng mờ!", 3)
+        notify("Tối Ưu FPS", "Đã tắt bóng râm, hậu kỳ và toàn bộ hiệu ứng hạt đồ họa!", 3)
+    end)
+
+    SecSystem:AddButton("🔄 Vào Lại Server Hiện Tại (Rejoin Server)", function()
+        pcall(function()
+            local ts = game:GetService("TeleportService")
+            ts:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+        end)
+    end)
+
+    SecSystem:AddButton("🌐 Đổi Sang Server Khác (Server Hop)", function()
+        pcall(function()
+            local http = game:GetService("HttpService")
+            local ts = game:GetService("TeleportService")
+            local url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100", game.PlaceId)
+            local raw = game:HttpGet(url)
+            local data = http:JSONDecode(raw)
+            if data and data.data then
+                for _, srv in ipairs(data.data) do
+                    if srv.id ~= game.JobId and srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers - 1 then
+                        ts:TeleportToPlaceInstance(game.PlaceId, srv.id, LocalPlayer)
+                        return
+                    end
+                end
+            end
+            ts:Teleport(game.PlaceId, LocalPlayer)
+        end)
     end)
 end)
 
