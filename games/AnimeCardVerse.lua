@@ -91,6 +91,9 @@ local activeConnections = {}
 local isScriptRunning = true
 local originalGamepassesOwns = nil
 local Gamepasses = nil
+local originalVFXUtilPlayAt = nil
+local VFXUtil = nil
+local potatoConn = nil
 
 local function trackConnection(conn)
     if conn then
@@ -115,6 +118,36 @@ env.__HelmAnimeCardVerseCleanup = function()
     end
     pcall(function()
         LocalPlayer:SetAttribute("Gamepass_InfiniteMagnet", nil)
+    end)
+
+    -- Phục hồi hiển thị 3D Rendering (Headless Mode)
+    pcall(function()
+        RunService:Set3dRenderingEnabled(true)
+    end)
+
+    -- Phục hồi VFXUtil nếu đã hook
+    if VFXUtil and originalVFXUtilPlayAt then
+        pcall(function()
+            VFXUtil.PlayAt = originalVFXUtilPlayAt
+        end)
+    end
+
+    -- Hủy kết nối Potato Graphics
+    if potatoConn then
+        pcall(function() potatoConn:Disconnect() end)
+        potatoConn = nil
+    end
+
+    -- Khôi phục FPS Cap chuẩn
+    if typeof(setfpscap) == "function" then
+        pcall(function() setfpscap(60) end)
+    end
+
+    -- Khôi phục Lighting
+    pcall(function()
+        local lighting = game:GetService("Lighting")
+        lighting.GlobalShadows = true
+        lighting.FogEnd = 1000
     end)
 
     -- Gỡ bỏ NoClip, LinearVelocity và BodyVelocity nếu đang bật
@@ -420,7 +453,17 @@ local Config = {
     AlwaysSprint = false,
     CustomPlayerSpeedEnabled = false,
     PlayerWalkSpeed = 26, -- Tốc độ chạy tùy chỉnh của Player (Mặc định 26 studs/s an toàn tuyệt đối)
-    FloatingMenuButton = true
+    FloatingMenuButton = true,
+
+    -- [HỆ THỐNG TỐI ƯU HIỆU NĂNG CỰC ĐẠI & MULTI-ACCOUNT HEADLESS]
+    HeadlessMode = false, -- Tắt render 3D game hoàn toàn (0% GPU, giảm CPU tối đa khi treo nhiều acc)
+    SuppressHitFX = false, -- Chặn spam hiệu ứng va chạm VFX và particle khi đánh tốc độ cao
+    PotatoGraphics = false, -- Xóa toàn bộ Texture/Decal và ép vật liệu SmoothPlastic toàn map
+    DisableLightingEffects = false, -- Tắt bóng đổ, sương mù và toàn bộ hậu kỳ ánh sáng
+    TargetFPSCap = 60, -- Giới hạn khung hình (15, 30, 60, 120, uncap)
+
+    -- [HỆ THỐNG NHẬP CODE & SỰ KIỆN]
+    CustomCodeInput = ""
 }
 
 -- ========================================================================
@@ -3838,11 +3881,14 @@ pcall(function()
         end
     end)
 
-    SecActivities:AddButton("💎 Nhận Toàn Bộ Thưởng 1-Chạm (Quests, Bounty, Pass, Milestones)", function()
+    SecActivities:AddButton("💎 Nhận Toàn Bộ Thưởng 1-Chạm (Quests, Bounty, Pass, Milestones, Event)", function()
         pcall(function()
             claimAllQuests()
             claimAllLevelMilestones()
             claimAllAchievements()
+            if typeof(claimAllUpdateEvents) == "function" then
+                claimAllUpdateEvents()
+            end
             if RemoteBank and RemoteBank.BountyClaim then
                 RemoteBank.BountyClaim:Fire(nil)
             end
@@ -3855,7 +3901,7 @@ pcall(function()
             if RemoteBank and RemoteBank.BattlepassClaimAll then
                 RemoteBank.BattlepassClaimAll:Fire()
             end
-            notify("Nhận Thưởng", "Đã gửi toàn bộ yêu cầu nhận thưởng Quests, Milestones, Achievements & Pass!", 4)
+            notify("Nhận Thưởng", "Đã gửi toàn bộ yêu cầu nhận thưởng Quests, Milestones, Achievements, Pass & Update Event!", 4)
         end)
     end)
 
@@ -4157,24 +4203,270 @@ pcall(function()
 end)
 
 -- ------------------------------------------------------------------------
--- TAB 5: TIỆN ÍCH & NHẬN THƯỞNG (MISC & SYSTEM)
+-- TAB 5: TIỆN ÍCH, NHẬN THƯỞNG & SIÊU TỐI ƯU HIỆU NĂNG (MISC & SYSTEM)
 -- ------------------------------------------------------------------------
+-- [A] HỆ THỐNG NHẬN THƯỞNG SỰ KIỆN & QUÉT CODE TỰ ĐỘNG
+local function claimAllUpdateEvents()
+    local claimed = 0
+    pcall(function()
+        local ue = safeRequire(ReplicatedStorage:FindFirstChild("DataModules")
+            and ReplicatedStorage.DataModules:FindFirstChild("Progression")
+            and ReplicatedStorage.DataModules.Progression:FindFirstChild("UpdateEvent"))
+        if ue and type(ue.Powers) == "table" and RemoteBank and RemoteBank.ClaimUpdateEvent then
+            for _, pData in ipairs(ue.Powers) do
+                local pName = type(pData) == "table" and pData.Power or pData
+                if pName then
+                    RemoteBank.ClaimUpdateEvent:Fire(pName)
+                    claimed = claimed + 1
+                    task.wait(0.08)
+                end
+            end
+        end
+    end)
+    return claimed
+end
+
+local function redeemAllCodes()
+    task.spawn(function()
+        local codesList = {}
+        local seen = {}
+
+        local function addCode(c)
+            if type(c) == "string" and #c > 0 then
+                local up = string.upper(c:gsub("%s+", ""))
+                if not seen[up] then
+                    seen[up] = true
+                    table.insert(codesList, up)
+                end
+            end
+        end
+
+        -- 1. Bóc tách trực tiếp từ DataModules.Economy.Codes của game
+        pcall(function()
+            local codeMod = safeRequire(ReplicatedStorage:FindFirstChild("DataModules")
+                and ReplicatedStorage.DataModules:FindFirstChild("Economy")
+                and ReplicatedStorage.DataModules.Economy:FindFirstChild("Codes"))
+            if codeMod and type(codeMod) == "table" then
+                for cKey, _ in pairs(codeMod) do
+                    addCode(tostring(cKey))
+                end
+            end
+        end)
+
+        -- 2. Bổ sung cơ sở dữ liệu code Anime CardVerse đã phát hành
+        local verifiedCodes = {
+            "EARLYACCESS", "EARLYACCESS+", "CONTENTCREATOR",
+            "RELEASE", "UPDATE1", "SHADOWS", "EGRISE",
+            "100KVISITS", "500KVISITS", "1MVISITS",
+            "10KLIKES", "25KLIKES", "SORRYFORDELAY",
+            "SUB2PROTOPOLY", "WELCOME", "FREEGEMS"
+        }
+        for _, c in ipairs(verifiedCodes) do
+            addCode(c)
+        end
+
+        if #codesList == 0 then
+            notify("Nhập Code", "Không tìm thấy danh sách mã code khả dụng!", 3)
+            return
+        end
+
+        notify("Nhập Code", string.format("Bắt đầu tự động nhập %d mã code...", #codesList), 3)
+
+        local successCount = 0
+        local resultConn = nil
+        if RemoteBank and RemoteBank.RedeemCodeResult then
+            resultConn = RemoteBank.RedeemCodeResult.OnClientEvent:Connect(function(res)
+                if res and res.success then
+                    successCount = successCount + 1
+                end
+            end)
+        end
+
+        for _, code in ipairs(codesList) do
+            if not isScriptRunning then break end
+            pcall(function()
+                if RemoteBank and RemoteBank.RedeemCode then
+                    RemoteBank.RedeemCode:Fire(code)
+                end
+            end)
+            task.wait(0.3)
+        end
+
+        task.wait(0.6)
+        if resultConn then
+            pcall(function() resultConn:Disconnect() end)
+        end
+
+        notify("Nhập Code Hoàn Tất", string.format("Đã gửi %d mã code! Nhận thành công: %d.", #codesList, successCount), 4)
+    end)
+end
+
+-- [B] HỆ THỐNG TỐI ƯU HÓA HIỆU NĂNG CỰC ĐẠI (FPS BOOSTER & MULTI-ACCOUNT HEADLESS)
+-- 1. Hook chặn VFXUtil và thư mục VFX để chống tràn bộ nhớ hạt khi farm tốc độ cao
+VFXUtil = safeRequire(ReplicatedStorage:FindFirstChild("Utilities") and ReplicatedStorage.Utilities:FindFirstChild("VFXUtil"))
+if VFXUtil and VFXUtil.PlayAt then
+    originalVFXUtilPlayAt = VFXUtil.PlayAt
+    VFXUtil.PlayAt = function(...)
+        if Config.SuppressHitFX then return end
+        return originalVFXUtilPlayAt(...)
+    end
+end
+
+pcall(function()
+    local vfxFolder = Workspace:FindFirstChild("VFX")
+    if vfxFolder then
+        trackConnection(vfxFolder.ChildAdded:Connect(function(child)
+            if Config.SuppressHitFX then
+                pcall(function() child:Destroy() end)
+            end
+        end))
+    end
+end)
+
+-- 2. Potato Graphics (Gọt đồ họa, tắt texture, decal, particles liên tục)
+local function applyPotatoToInstance(inst)
+    if not inst then return end
+    pcall(function()
+        if inst:IsA("BasePart") then
+            inst.Material = Enum.Material.SmoothPlastic
+            inst.CastShadow = false
+            inst.Reflectance = 0
+        elseif inst:IsA("Decal") or inst:IsA("Texture") then
+            inst.Transparency = 1
+        elseif inst:IsA("ParticleEmitter") or inst:IsA("Trail") or inst:IsA("Smoke") or inst:IsA("Fire") or inst:IsA("Sparkles") or inst:IsA("Beam") then
+            inst.Enabled = false
+        elseif inst:IsA("Highlight") then
+            inst.Enabled = false
+        elseif inst:IsA("Explosion") then
+            inst.Visible = false
+        end
+    end)
+end
+
+local function setPotatoGraphics(enabled)
+    Config.PotatoGraphics = enabled
+    if enabled then
+        pcall(function()
+            for _, inst in ipairs(Workspace:GetDescendants()) do
+                applyPotatoToInstance(inst)
+            end
+        end)
+        if not potatoConn then
+            potatoConn = Workspace.DescendantAdded:Connect(function(child)
+                if Config.PotatoGraphics then
+                    applyPotatoToInstance(child)
+                end
+            end)
+            trackConnection(potatoConn)
+        end
+        notify("Đồ Họa Khoai Tây", "Đã gọt toàn bộ Texture & hiệu ứng hạt thành SmoothPlastic!", 3)
+    else
+        if potatoConn then
+            pcall(function() potatoConn:Disconnect() end)
+            potatoConn = nil
+        end
+        notify("Đồ Họa", "Đã tắt chế độ Potato Graphics!", 2)
+    end
+end
+
+-- 3. Headless Mode (Tắt hoàn toàn Render 3D Engine của Roblox)
+local function setHeadlessMode(enabled)
+    Config.HeadlessMode = enabled
+    pcall(function()
+        RunService:Set3dRenderingEnabled(not enabled)
+    end)
+    if enabled then
+        notify("Multi-Account Headless", "ĐÃ TẮT RENDER 3D! GPU giảm về ~0%, CPU tiết kiệm tối đa để treo nhiều tài khoản.", 4)
+    else
+        notify("Multi-Account Headless", "Đã bật lại hiển thị 3D thông thường.", 3)
+    end
+end
+
+-- 4. Lighting & Shadow Suppressor
+local function setLightingOptimization(enabled)
+    Config.DisableLightingEffects = enabled
+    pcall(function()
+        local lighting = game:GetService("Lighting")
+        if enabled then
+            lighting.GlobalShadows = false
+            lighting.FogEnd = 9e9
+            lighting.Brightness = 1
+            for _, v in ipairs(lighting:GetChildren()) do
+                if v:IsA("PostProcessEffect") or v:IsA("BlurEffect") or v:IsA("SunRaysEffect") or v:IsA("ColorCorrectionEffect") or v:IsA("BloomEffect") or v:IsA("DepthOfFieldEffect") or v:IsA("Atmosphere") then
+                    v.Enabled = false
+                end
+            end
+        else
+            lighting.GlobalShadows = true
+            lighting.FogEnd = 1000
+            for _, v in ipairs(lighting:GetChildren()) do
+                if v:IsA("PostProcessEffect") or v:IsA("BlurEffect") or v:IsA("SunRaysEffect") or v:IsA("ColorCorrectionEffect") or v:IsA("BloomEffect") or v:IsA("DepthOfFieldEffect") or v:IsA("Atmosphere") then
+                    v.Enabled = true
+                end
+            end
+        end
+    end)
+end
+
+-- 5. FPS Cap Controller
+local function applyFPSCap(fps)
+    local target = tonumber(fps) or 60
+    Config.TargetFPSCap = target
+    if typeof(setfpscap) == "function" then
+        pcall(function()
+            setfpscap(target <= 0 and 999 or target)
+        end)
+    end
+end
+
+-- [C] GIAO DIỆN TAB TIỆN ÍCH (TAB 5)
 pcall(function()
     local TabMisc = Window:CreateTab("Tiện Ích")
-    local SecCodes = TabMisc:CreateSector("Nhận Thưởng & Menu", "left")
-    local SecSystem = TabMisc:CreateSector("Hệ Thống, Tối Ưu & Kết Nối", "right")
+    local SecCodes = TabMisc:CreateSector("🎁 Nhận Thưởng & Sự Kiện (Codes & Rewards)", "left")
+    local SecSystem = TabMisc:CreateSector("⚡ Tối Ưu Hiệu Năng & Multi-Account (FPS Booster)", "right")
 
-    SecCodes:AddButton("💎 Nhận Toàn Bộ Thưởng 1-Chạm (Daily / Group / Pass / Quests / Milestones)", function()
+    -- ========================================================================
+    -- CỘT TRÁI: NHẬN THƯỞNG, CODES, SỰ KIỆN & GIAO DIỆN
+    -- ========================================================================
+    SecCodes:AddButton("💎 Nhận Toàn Bộ Thưởng 1-Chạm (Daily, Pass, Event, Quests)", function()
         pcall(function()
             claimAllQuests()
             claimAllLevelMilestones()
             claimAllAchievements()
+            claimAllUpdateEvents()
             if RemoteBank and RemoteBank.ClaimDailyReward then RemoteBank.ClaimDailyReward:Fire() end
             if RemoteBank and RemoteBank.ClaimGroupReward then RemoteBank.ClaimGroupReward:Fire() end
             if RemoteBank and RemoteBank.BattlepassClaimAll then RemoteBank.BattlepassClaimAll:Fire() end
             if RemoteBank and RemoteBank.BountyClaim then RemoteBank.BountyClaim:Fire(nil) end
         end)
-        notify("Nhận Thưởng", "Đã gửi toàn bộ yêu cầu nhận thưởng Quests, Milestones, Achievements & Pass!", 3)
+        notify("Nhận Thưởng", "Đã gửi toàn bộ yêu cầu nhận thưởng Quests, Milestones, Achievements, Pass & Update Event!", 4)
+    end)
+
+    SecCodes:AddButton("🎁 Tự Động Nhập Toàn Bộ Code (Redeem All Codes)", function()
+        redeemAllCodes()
+    end)
+
+    SecCodes:AddTextbox("Mã Code Tùy Chỉnh", Config.CustomCodeInput or "", function(text)
+        Config.CustomCodeInput = tostring(text or ""):gsub("%s+", "")
+    end)
+
+    SecCodes:AddButton("Nhập Mã Code Đã Điền", function()
+        local code = tostring(Config.CustomCodeInput or ""):gsub("%s+", "")
+        if #code > 0 then
+            pcall(function()
+                if RemoteBank and RemoteBank.RedeemCode then
+                    RemoteBank.RedeemCode:Fire(code)
+                end
+            end)
+            notify("Nhập Code", "Đã gửi yêu cầu nhập mã: " .. code, 3)
+        else
+            notify("Nhập Code", "Vui lòng nhập mã code vào ô trước khi bấm!", 3)
+        end
+    end)
+
+    SecCodes:AddButton("🌟 Nhận Quà Sự Kiện Update (Claim Update Event)", function()
+        local count = claimAllUpdateEvents()
+        notify("Sự Kiện Update", string.format("Đã gửi yêu cầu nhận thưởng cho %d thẻ sự kiện!", count), 3)
     end)
 
     SecCodes:AddToggle("Nút Bật/Tắt Menu Nổi (Floating Button)", Config.FloatingMenuButton ~= false, function(val)
@@ -4194,6 +4486,71 @@ pcall(function()
                 RemoteBank.MountToggle:Fire()
             end
         end)
+    end)
+
+    -- ========================================================================
+    -- CỘT PHẢI: SIÊU TỐI ƯU HIỆU NĂNG, MULTI-ACCOUNT HEADLESS & HỆ THỐNG
+    -- ========================================================================
+    SecSystem:AddToggle("🖥️ Treo Multi-Acc Headless (Tắt Render 3D 0% GPU)", Config.HeadlessMode, function(val)
+        setHeadlessMode(val)
+    end)
+
+    SecSystem:AddToggle("🚫 Chặn Spam Hit VFX & Particle Đòn Đánh (VFX Suppressor)", Config.SuppressHitFX, function(val)
+        Config.SuppressHitFX = val
+        if val then
+            pcall(function()
+                if Workspace:FindFirstChild("VFX") then
+                    Workspace.VFX:ClearAllChildren()
+                end
+            end)
+            notify("VFX Suppressor", "Đã bật chặn hiệu ứng va chạm & chiêu thức để chống tràn RAM!", 3)
+        else
+            notify("VFX Suppressor", "Đã tắt chặn VFX.", 2)
+        end
+    end)
+
+    SecSystem:AddToggle("🥔 Đồ Họa Khoai Tây Siêu Mượt (Potato Graphics)", Config.PotatoGraphics, function(val)
+        setPotatoGraphics(val)
+    end)
+
+    SecSystem:AddToggle("🌑 Tắt Toàn Bộ Bóng Râm & Hậu Kỳ Ánh Sáng", Config.DisableLightingEffects, function(val)
+        setLightingOptimization(val)
+    end)
+
+    SecSystem:AddDropdown("🎯 Giới Hạn Khung Hình (FPS Cap)", {
+        "15 FPS (Treo Tiết Kiệm Tối Đa)",
+        "30 FPS (Mượt Nhẹ)",
+        "60 FPS (Chuẩn Mặc Định)",
+        "120 FPS (Tần Số Quét Cao)",
+        "Không Giới Hạn (Uncapped)"
+    }, "60 FPS (Chuẩn Mặc Định)", false, function(val)
+        local str = tostring(val or "")
+        if str:find("15") then
+            applyFPSCap(15)
+        elseif str:find("30") then
+            applyFPSCap(30)
+        elseif str:find("60") then
+            applyFPSCap(60)
+        elseif str:find("120") then
+            applyFPSCap(120)
+        elseif str:find("Không") or str:find("Uncap") then
+            applyFPSCap(0)
+        end
+    end)
+
+    SecSystem:AddButton("🚀 Kích Hoạt Siêu Tối Ưu FPS 1-Chạm (Super Boost All)", function()
+        pcall(function()
+            setLightingOptimization(true)
+            setPotatoGraphics(true)
+            Config.SuppressHitFX = true
+            if Workspace:FindFirstChild("VFX") then
+                Workspace.VFX:ClearAllChildren()
+            end
+            if typeof(collectgarbage) == "function" then
+                collectgarbage("collect")
+            end
+        end)
+        notify("Siêu Tối Ưu FPS", "Đã bật Potato Graphics, No Shadows, Suppress VFX và dọn rác RAM thành công!", 3)
     end)
 
     SecSystem:AddToggle("⚡ Tùy Chỉnh Tốc Độ Player (Custom WalkSpeed)", Config.CustomPlayerSpeedEnabled, function(val)
@@ -4265,27 +4622,6 @@ pcall(function()
             end)
         end
     end))
-
-    SecSystem:AddButton("🚀 Tối Ưu Hóa FPS Tối Đa (Super FPS Boost)", function()
-        pcall(function()
-            local lighting = game:GetService("Lighting")
-            lighting.GlobalShadows = false
-            lighting.FogEnd = 9e9
-            for _, v in ipairs(lighting:GetChildren()) do
-                if v:IsA("PostProcessEffect") or v:IsA("BlurEffect") or v:IsA("SunRaysEffect") or v:IsA("ColorCorrectionEffect") or v:IsA("BloomEffect") or v:IsA("DepthOfFieldEffect") then
-                    v.Enabled = false
-                end
-            end
-            for _, v in ipairs(game:GetDescendants()) do
-                if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Sparkles") then
-                    v.Enabled = false
-                elseif v:IsA("Explosion") then
-                    v.Visible = false
-                end
-            end
-        end)
-        notify("Tối Ưu FPS", "Đã tắt bóng râm, hậu kỳ và toàn bộ hiệu ứng hạt đồ họa!", 3)
-    end)
 
     SecSystem:AddButton("🔄 Vào Lại Server Hiện Tại (Rejoin Server)", function()
         pcall(function()
