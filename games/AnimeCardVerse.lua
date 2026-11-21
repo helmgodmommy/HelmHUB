@@ -244,6 +244,22 @@ local InvasionData = safeRequire(ReplicatedStorage:FindFirstChild("DataModules")
     and ReplicatedStorage.DataModules:FindFirstChild("World")
     and ReplicatedStorage.DataModules.World:FindFirstChild("InvasionData"))
 local Format = safeRequire(ReplicatedStorage:FindFirstChild("Utilities") and ReplicatedStorage.Utilities:FindFirstChild("Format"))
+local PowersData = safeRequire(ReplicatedStorage:FindFirstChild("DataModules")
+    and ReplicatedStorage.DataModules:FindFirstChild("Inventory")
+    and ReplicatedStorage.DataModules.Inventory:FindFirstChild("Powers"))
+local Affinities = safeRequire(ReplicatedStorage:FindFirstChild("DataModules")
+    and ReplicatedStorage.DataModules:FindFirstChild("Combat")
+    and ReplicatedStorage.DataModules.Combat:FindFirstChild("Affinities"))
+local EnemyTypes = safeRequire(ReplicatedStorage:FindFirstChild("DataModules")
+    and ReplicatedStorage.DataModules:FindFirstChild("Combat")
+    and ReplicatedStorage.DataModules.Combat:FindFirstChild("EnemyTypes"))
+local BuffData = safeRequire(ReplicatedStorage:FindFirstChild("DataModules")
+    and ReplicatedStorage.DataModules:FindFirstChild("Combat")
+    and ReplicatedStorage.DataModules.Combat:FindFirstChild("BuffData"))
+local CastLock = safeRequire(ReplicatedStorage:FindFirstChild("Utilities")
+    and ReplicatedStorage.Utilities:FindFirstChild("CastLock"))
+local StunUtil = safeRequire(ReplicatedStorage:FindFirstChild("Utilities")
+    and ReplicatedStorage.Utilities:FindFirstChild("StunUtil"))
 local AttackClient = nil
 local _MovementClient = nil
 
@@ -303,11 +319,18 @@ local Config = {
 
     -- Combat: Powers & Hotbar Skills
     AutoSkills = false,
+    SmartSkills = true, -- Kỹ Năng Thông Minh (Tự động tính điểm ưu tiên Buff/Khắc Chế/DPS/Hàng Đợi)
+    PredictiveAim = true, -- Bắn đón đầu theo vector vận tốc của quái
+    OverkillProtection = true, -- Không phí chiêu to/hồi lâu khi quái < 8% máu
+    ClusterAOE = true, -- Gom trọng tâm quái diện rộng (AOE Density Centroid)
     SkillSlots = { [1] = true, [2] = true, [3] = true, [4] = true, [5] = true },
     SkillDelay = 0.15,
 
     -- Combat: Ultimate
     AutoUltimate = false,
+    SmartUltimate = true, -- Chiêu cuối thông minh
+    SmartUltimateMode = "BossOnly", -- "BossOnly", "Cluster", "Any"
+    SmartUltimateClusterCount = 3,
     UltimateCheckDelay = 1.0,
 
     -- Targeting & Mob Selection
@@ -1505,6 +1528,252 @@ local function canCastUltimate()
 end
 
 -- ========================================================================
+-- [6.5] SMART SKILL & ULTIMATE ENGINE (HỆ THỐNG ĐIỀU PHỐI KỸ NĂNG THÔNG MINH)
+-- ========================================================================
+local cachedSlotPowers = {}
+local lastPowersCacheUpdate = 0
+
+local function isPlayerCastLocked()
+    if CastLock and typeof(CastLock.IsLocked) == "function" then
+        local ok, locked = pcall(CastLock.IsLocked, LocalPlayer)
+        if ok and locked then return true end
+    end
+    if StunUtil and typeof(StunUtil.IsStunned) == "function" then
+        local ok, stunned = pcall(StunUtil.IsStunned, LocalPlayer)
+        if ok and stunned then return true end
+    end
+    if LocalPlayer:GetAttribute("CastHold") == true then
+        return true
+    end
+    local untilTime = LocalPlayer:GetAttribute("CastLockUntil")
+    if type(untilTime) == "number" and workspace:GetServerTimeNow() < untilTime then
+        return true
+    end
+    return false
+end
+
+local function refreshEquippedPowersCache()
+    local now = os.clock()
+    if (now - lastPowersCacheUpdate) < 0.5 then
+        return cachedSlotPowers
+    end
+    lastPowersCacheUpdate = now
+
+    if not DataClient or typeof(DataClient.Get) ~= "function" then
+        return cachedSlotPowers
+    end
+
+    local okEquip, equipped = pcall(DataClient.Get, "Equipped_Powers")
+    local okPowers, allPowers = pcall(DataClient.Get, "Powers")
+    if not okEquip or type(equipped) ~= "table" then
+        return cachedSlotPowers
+    end
+    allPowers = (okPowers and type(allPowers) == "table") and allPowers or {}
+
+    for slot = 1, 5 do
+        local uuid = equipped[slot]
+        if typeof(uuid) == "table" and uuid.UUID then
+            uuid = uuid.UUID
+        end
+        if uuid and uuid ~= "" then
+            local card = allPowers[uuid]
+            local pName = card and (card.Power or card.Name) or (type(uuid) == "string" and uuid or nil)
+            local staticData = (pName and PowersData) and PowersData[pName] or nil
+
+            local isBuff = false
+            if pName then
+                local lowerName = string.lower(pName)
+                if lowerName:find("buff") or lowerName:find("logia") or lowerName:find("compass") or lowerName:find("aura") or lowerName:find("awakening") then
+                    isBuff = true
+                end
+            end
+            if BuffData and typeof(BuffData.Get) == "function" and pName then
+                local b = BuffData.Get(pName)
+                if b then isBuff = true end
+            end
+
+            cachedSlotPowers[slot] = {
+                Slot = slot,
+                UUID = uuid,
+                Name = pName or ("Skill " .. tostring(slot)),
+                Static = staticData,
+                Stats = staticData and staticData.Stats or {},
+                Element = staticData and staticData.Element or nil,
+                Type = staticData and staticData.Type or nil,
+                CastDuration = (staticData and tonumber(staticData.CastDuration)) or 1.0,
+                IsBuff = isBuff
+            }
+        else
+            cachedSlotPowers[slot] = nil
+        end
+    end
+    return cachedSlotPowers
+end
+
+local function computeSmartTargetPosition(target, pData)
+    local tRoot = target:FindFirstChild("HumanoidRootPart")
+        or target:FindFirstChild("Torso")
+        or target.PrimaryPart
+        or target:FindFirstChild("Hitbox")
+        or target:FindFirstChildWhichIsA("BasePart")
+    if not tRoot then return Vector3.zero end
+    local basePos = tRoot.Position
+
+    -- 1. Predictive Aiming: Bắn đón đầu vector vận tốc của quái
+    if Config.PredictiveAim then
+        local vel = Vector3.zero
+        pcall(function()
+            vel = tRoot.AssemblyLinearVelocity
+        end)
+        if vel.Magnitude > 2 and vel.Magnitude < 150 then
+            local castLead = math.clamp((pData and pData.CastDuration or 0.8) * 0.35, 0.1, 0.5)
+            basePos = basePos + (vel * castLead)
+        end
+    end
+
+    -- 2. AOE Centroid Density Clustering: Gom trọng tâm cụm quái
+    if Config.ClusterAOE and target and target.Parent then
+        local clusterCentroid = basePos
+        local clusterCount = 1
+        local allEnemies = getAllEnemies()
+        for _, enemy in ipairs(allEnemies) do
+            if enemy ~= target and isValidCombatTarget(enemy) then
+                local eRoot = enemy:FindFirstChild("HumanoidRootPart") or enemy.PrimaryPart
+                if eRoot then
+                    local dist = (eRoot.Position - basePos).Magnitude
+                    if dist <= 28 then
+                        clusterCentroid = clusterCentroid + eRoot.Position
+                        clusterCount = clusterCount + 1
+                    end
+                end
+            end
+        end
+        if clusterCount >= 2 then
+            basePos = clusterCentroid / clusterCount
+        end
+    end
+
+    return basePos
+end
+
+local function evaluateSmartSkillScore(slotIdx, target, currentHP, maxHP)
+    if isSkillOnCooldown(slotIdx) then return -1 end
+
+    local slotMap = refreshEquippedPowersCache()
+    local pData = slotMap[slotIdx]
+    if not pData then
+        return 50 - slotIdx
+    end
+
+    local stats = pData.Stats or {}
+    local dmg = tonumber(stats.Damage) or 30
+    local cd = tonumber(stats.Cooldown) or 8
+    local multiHit = tonumber(stats.MultiHit) or 1
+    local dps = (dmg * multiHit) / math.max(cd, 1)
+
+    -- 1. Ưu tiên tuyệt đối Buffs & Synergies
+    if pData.IsBuff then
+        local isActive = false
+        if BuffData and typeof(BuffData.IsActive) == "function" then
+            pcall(function()
+                isActive = BuffData.IsActive(LocalPlayer, pData.Name)
+            end)
+        end
+        if not isActive then
+            return 100000 -- Buff chưa kích hoạt: Ưu tiên xả trước tiên
+        else
+            return 10 -- Đang có buff còn hiệu lực: Ưu tiên thấp
+        end
+    end
+
+    local score = dps * 10
+
+    -- 2. Khắc chế hệ nguyên tố (Elemental Affinity Multiplier)
+    if target and pData.Element then
+        local affinityMult = 1
+        if Affinities and typeof(Affinities.GetMultiplier) == "function" then
+            local typeName = (type(pData.Type) == "table" and pData.Type.name) or (type(pData.Type) == "string" and pData.Type) or nil
+            local ok, m = pcall(Affinities.GetMultiplier, target, pData.Element, typeName)
+            if ok and type(m) == "number" then
+                affinityMult = m
+            end
+        else
+            local elems = (type(pData.Element) == "table") and pData.Element or { pData.Element }
+            for _, el in ipairs(elems) do
+                local elName = (type(el) == "table" and el.name) or tostring(el)
+                local val = target:GetAttribute("Affinity_" .. elName)
+                if type(val) == "number" then
+                    affinityMult = affinityMult * val
+                end
+            end
+        end
+        score = score * affinityMult
+    end
+
+    -- 3. Overkill Protection: Tránh lãng phí chiêu to hồi lâu khi quái chỉ còn < 8% HP
+    if Config.OverkillProtection and currentHP and maxHP and maxHP > 0 then
+        local hpRatio = currentHP / maxHP
+        if hpRatio <= 0.08 and cd >= 7 then
+            score = score * 0.05
+        end
+    end
+
+    -- 4. Giảm ưu tiên chiêu niệm lâu nếu đang phải né Telegraph
+    if Config.AutoDodge and Config.IsCurrentlyDodging and (pData.CastDuration or 1) > 1.2 then
+        score = score * 0.1
+    end
+
+    return score
+end
+
+local function shouldSmartCastUltimate(target)
+    if not canCastUltimate() then return false end
+    if not isValidCombatTarget(target) then return false end
+
+    if not Config.SmartUltimate then
+        return true
+    end
+
+    local mode = Config.SmartUltimateMode or "BossOnly"
+    if mode == "Any" then
+        return true
+    end
+
+    local isBoss = false
+    if EnemyTypes and typeof(EnemyTypes.IsBoss) == "function" then
+        local ok, res = pcall(EnemyTypes.IsBoss, target)
+        if ok and res then isBoss = true end
+    end
+    if not isBoss then
+        local eType = target:GetAttribute("EnemyType")
+        if eType == "Boss" or eType == "Mini Boss" or target.Name:find("Boss") or target.Name:find("Egris") or target.Name:find("Freezer") or target.Name:find("Aizo") or target.Name:find("Belu") then
+            isBoss = true
+        end
+    end
+
+    if mode == "BossOnly" then
+        return isBoss
+    elseif mode == "Cluster" then
+        if isBoss then return true end
+        local tRoot = target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart
+        if not tRoot then return false end
+        local count = 0
+        local allEnemies = getAllEnemies()
+        for _, enemy in ipairs(allEnemies) do
+            if isValidCombatTarget(enemy) then
+                local eRoot = enemy:FindFirstChild("HumanoidRootPart") or enemy.PrimaryPart
+                if eRoot and (eRoot.Position - tRoot.Position).Magnitude <= 32 then
+                    count = count + 1
+                end
+            end
+        end
+        return count >= (Config.SmartUltimateClusterCount or 3)
+    end
+
+    return true
+end
+
+-- ========================================================================
 -- [7] AUTO DODGE ENGINE (HỆ THỐNG TỰ ĐỘNG NÉ CHIÊU BOSS & VÙNG ĐỎ TELEGRAPH)
 -- ========================================================================
 local activeTelegraphs = {}
@@ -2095,10 +2364,11 @@ pcall(function()
     end
 end)
 
+local isMeleeActiveInClient = false
+
 -- 1. Auto Melee Punch Loop (Đồng bộ nhịp chuẩn game và server, không xung đột packet)
 task.spawn(function()
     local lastTargetScan = 0
-    local isMeleeActiveInClient = false
     while isScriptRunning do
         local delaySec = Config.PunchDelay or 0.35
         local inInvasion = isInInvasion()
@@ -2148,7 +2418,7 @@ task.spawn(function()
     end
 end)
 
--- 2. Auto Hotbar Powers / Skills Loop
+-- 2. Auto Hotbar Powers / Skills Loop (Tích hợp Smart Skill Engine)
 task.spawn(function()
     while isScriptRunning do
         local inInvasion = isInInvasion()
@@ -2160,29 +2430,81 @@ task.spawn(function()
         local inInvasionSkills = inInvasion and Config.InvasionAutoFarm and Config.InvasionAutoSkills
         local inMissionSkills = inMission and (Config.AutoMission or Config.AutoMissionFarm) and Config.MissionAutoSkills
         local canSkills = Config.AutoSkills or inInvasionSkills or inMissionSkills or bountySkills or questSkills
+
         if canSkills then
             local target = Config.TargetCurrent
             if not isValidCombatTarget(target) then
                 target = getBestTarget()
                 Config.TargetCurrent = target
             end
-            if target then
-                local tRoot = target:FindFirstChild("HumanoidRootPart")
-                    or target:FindFirstChild("Torso")
-                    or target.PrimaryPart
-                    or target:FindFirstChild("Hitbox")
-                    or target:FindFirstChildWhichIsA("BasePart")
-                local targetPos = tRoot and tRoot.Position or Vector3.new(0, 0, 0)
 
-                for slotIdx = 1, 5 do
-                    if Config.SkillSlots[slotIdx] and not isSkillOnCooldown(slotIdx) then
-                        pcall(function()
-                            RemoteBank.CastPower:Fire({
-                                hotbar = slotIdx,
-                                targetPosition = targetPos
-                            })
-                        end)
-                        task.wait(0.06)
+            if isValidCombatTarget(target) then
+                if Config.SmartSkills then
+                    -- ====================================================
+                    -- CHẾ ĐỘ THÔNG MINH: ĐIỀU PHỐI ĐIỂM ƯU TIÊN & BUFFER CASTLOCK
+                    -- ====================================================
+                    if not isPlayerCastLocked() then
+                        local hum = target:FindFirstChildOfClass("Humanoid")
+                        local curHP = hum and hum.Health or nil
+                        local maxHP = hum and hum.MaxHealth or nil
+
+                        local bestSlot = nil
+                        local highestScore = -1
+
+                        for slotIdx = 1, 5 do
+                            if Config.SkillSlots[slotIdx] then
+                                local score = evaluateSmartSkillScore(slotIdx, target, curHP, maxHP)
+                                if score > highestScore then
+                                    highestScore = score
+                                    bestSlot = slotIdx
+                                end
+                            end
+                        end
+
+                        if bestSlot and highestScore > 0 then
+                            local slotMap = refreshEquippedPowersCache()
+                            local pData = slotMap[bestSlot]
+                            local targetPos = computeSmartTargetPosition(target, pData)
+
+                            -- Melee Weaving: Tạm ngừng melee chớp nhoáng tránh nghẽn luồng network packet
+                            if isMeleeActiveInClient and AttackClientModule and typeof(AttackClientModule.StopMelee) == "function" then
+                                pcall(function() AttackClientModule.StopMelee() end)
+                                isMeleeActiveInClient = false
+                            end
+
+                            pcall(function()
+                                RemoteBank.CastPower:Fire({
+                                    hotbar = bestSlot,
+                                    targetPosition = targetPos
+                                })
+                            end)
+
+                            local estCd = (pData and pData.Stats and tonumber(pData.Stats.Cooldown)) or 3
+                            localSkillCooldowns[bestSlot] = os.clock() + estCd
+                            task.wait(0.08)
+                        end
+                    end
+                else
+                    -- ====================================================
+                    -- CHẾ ĐỘ TUẦN TỰ THÔNG THƯỜNG (FALLBACK SEQUENTIAL)
+                    -- ====================================================
+                    local tRoot = target:FindFirstChild("HumanoidRootPart")
+                        or target:FindFirstChild("Torso")
+                        or target.PrimaryPart
+                        or target:FindFirstChild("Hitbox")
+                        or target:FindFirstChildWhichIsA("BasePart")
+                    local targetPos = tRoot and tRoot.Position or Vector3.new(0, 0, 0)
+
+                    for slotIdx = 1, 5 do
+                        if Config.SkillSlots[slotIdx] and not isSkillOnCooldown(slotIdx) then
+                            pcall(function()
+                                RemoteBank.CastPower:Fire({
+                                    hotbar = slotIdx,
+                                    targetPosition = targetPos
+                                })
+                            end)
+                            task.wait(0.06)
+                        end
                     end
                 end
             end
@@ -2191,7 +2513,7 @@ task.spawn(function()
     end
 end)
 
--- 3. Auto Ultimate Loop
+-- 3. Auto Ultimate Loop (Tích hợp Smart Ultimate Filter)
 task.spawn(function()
     while isScriptRunning do
         local inInvasion = isInInvasion()
@@ -2209,7 +2531,7 @@ task.spawn(function()
                 target = getBestTarget()
                 Config.TargetCurrent = target
             end
-            if target then
+            if isValidCombatTarget(target) and shouldSmartCastUltimate(target) then
                 pcall(function()
                     RemoteBank.CastUltimate:Fire()
                 end)
@@ -3038,8 +3360,38 @@ pcall(function()
         Config.AutoSkills = val
     end)
 
+    SecAttack:AddToggle("⚡ Kỹ Năng Thông Minh (Smart Skills Engine)", Config.SmartSkills, function(val)
+        Config.SmartSkills = val
+    end)
+
+    SecAttack:AddToggle("🎯 Bắn Đón Đầu Quái (Predictive Aiming)", Config.PredictiveAim, function(val)
+        Config.PredictiveAim = val
+    end)
+
+    SecAttack:AddToggle("🛡️ Chống Lãng Phí Chiêu (Overkill Protection)", Config.OverkillProtection, function(val)
+        Config.OverkillProtection = val
+    end)
+
+    SecAttack:AddToggle("🌌 Gom Trọng Tâm Quái AOE (Centroid Clustering)", Config.ClusterAOE, function(val)
+        Config.ClusterAOE = val
+    end)
+
     SecAttack:AddToggle("Tự Động Chiêu Cuối (Auto Ultimate)", Config.AutoUltimate, function(val)
         Config.AutoUltimate = val
+    end)
+
+    SecAttack:AddDropdown("👑 Chế Độ Chiêu Cuối (Smart Ultimate Mode)", {
+        "Chỉ Dùng Cho Boss / Mini-Boss (Boss Only)",
+        "Gom Đám Đông Quái (Cluster >= 3 Mobs)",
+        "Bất Kể Mục Tiêu (Any Target)"
+    }, "Chỉ Dùng Cho Boss / Mini-Boss (Boss Only)", function(selected)
+        if tostring(selected):find("Boss Only") then
+            Config.SmartUltimateMode = "BossOnly"
+        elseif tostring(selected):find("Cluster") then
+            Config.SmartUltimateMode = "Cluster"
+        else
+            Config.SmartUltimateMode = "Any"
+        end
     end)
 
     SecAttack:AddToggle("Hút Vật Phẩm Vô Hạn (Infinite Magnet)", Config.AutoMagnet, function(val)
