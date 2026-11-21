@@ -27,6 +27,59 @@ local LocalPlayer = Players.LocalPlayer
 repeat task.wait(0.1) until LocalPlayer and LocalPlayer:FindFirstChild("PlayerGui")
 
 -- ========================================================================
+-- [ANTI-AFK VĨNH VIỄN 3 LỚP (PREVENT 20-MIN IDLE KICK & AUTO-REJOIN)]
+-- ========================================================================
+pcall(function()
+    -- Lớp 1: Vô hiệu hóa trực tiếp các Connection kiểm tra Idled của Roblox CoreGui
+    if typeof(getconnections) == "function" then
+        for _, conn in ipairs(getconnections(LocalPlayer.Idled)) do
+            if typeof(conn.Disable) == "function" then
+                conn:Disable()
+            end
+        end
+    end
+end)
+
+-- Lớp 2: Luồng ngầm định kỳ giả lập hoạt động mỗi 2 phút (chạy kể cả khi Alt-Tab / Thu nhỏ cửa sổ)
+task.spawn(function()
+    local vu = game:GetService("VirtualUser")
+    local vim = nil
+    pcall(function()
+        vim = game:GetService("VirtualInputManager")
+    end)
+    while isScriptRunning do
+        task.wait(120) -- 2 phút một lần
+        pcall(function()
+            if vu then
+                vu:CaptureController()
+                vu:ClickButton2(Vector2.new(50, 50))
+            end
+        end)
+        pcall(function()
+            if vim then
+                vim:SendKeyEvent(true, Enum.KeyCode.RightShift, false, game)
+                task.wait(0.05)
+                vim:SendKeyEvent(false, Enum.KeyCode.RightShift, false, game)
+            end
+        end)
+    end
+end)
+
+-- Lớp 3: Fallback Listener khi sự kiện Idled phát sinh từ Engine
+pcall(function()
+    LocalPlayer.Idled:Connect(function()
+        pcall(function()
+            local vu = game:GetService("VirtualUser")
+            if vu then
+                vu:CaptureController()
+                vu:ClickButton2(Vector2.new(50, 50))
+            end
+        end)
+    end)
+end)
+
+
+-- ========================================================================
 -- [1] REVERSE-PATH RESOURCE CLEANUP (CHỐNG MEMORY LEAK KHI RE-RUN)
 -- ========================================================================
 local env = (typeof(getgenv) == "function" and getgenv()) or _G
@@ -200,7 +253,7 @@ pcall(function()
     local modules = cl and cl:WaitForChild("Modules", 5)
     if modules then
         AttackClient = safeRequire(modules:FindFirstChild("AttackClient"))
-        MovementClient = safeRequire(modules:FindFirstChild("MovementClient"))
+        ____MovementClient = safeRequire(modules:FindFirstChild("MovementClient"))
     end
 end)
 
@@ -2975,6 +3028,10 @@ end)
 pcall(function()
     SecAttack:AddToggle("Tự Động Đánh Thường (Auto Punch)", Config.AutoPunch, function(val)
         Config.AutoPunch = val
+        if val and not Config.AutoPosition then
+            Config.AutoPosition = true
+            notify("Tự Động Áp Sát", "Đã tự động kích hoạt Áp Sát Quái để đảm bảo đòn đánh trúng 100%!", 3)
+        end
     end)
 
     SecAttack:AddToggle("Tự Động Xả Kỹ Năng (Auto Skills)", Config.AutoSkills, function(val)
