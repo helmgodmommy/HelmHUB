@@ -1,10 +1,10 @@
--- HelmHub | Anime Champions X v1.4
+-- HelmHub | Anime Champions X v1.5
 -- Place: Anime Champions X [RUNS] (PlaceId 79755351995296, UniverseId 10778033190)
 -- Nguồn dữ liệu: dump Anime Champions X PlaceVersion 4. Hằng số dự phòng nằm trong bảng Known và được đọc lại
 -- từ ReplicatedStorage.Config.* / ReplicatedStorage.Shared.* lúc chạy qua SafeRequire + EnsureHighIdentity.
 -- Trạng thái: đã xử lý triệt để lỗi hạ thread identity (lacking capability Plugin), tối ưu hiệu năng (Remote/ECS/Store/UI Cache) và nâng cấp toàn diện theo Logic/Rules của game.
 
-local SCRIPT_VERSION = "1.4"
+local SCRIPT_VERSION = "1.5"
 
 local env = (typeof(getgenv) == "function" and getgenv()) or _G
 if env.__HelmACXCleanup and typeof(env.__HelmACXCleanup) == "function" then
@@ -983,6 +983,13 @@ local Session = {
     activeMerchantDropdown = nil,
     filterMerchantToggleUI = nil,
     matchSnapshot = nil,
+    matchOutcome = nil,
+    currentRunId = nil,
+    currentVoteOption = nil,
+    lastVotedRunId = nil,
+    lastVotedChoice = nil,
+    lastVoteSentAt = 0,
+    lastBossWarpAt = 0,
     lastPinnedQuestId = nil,
     currentLobby = nil,
     invitedFriendsMap = {}
@@ -1499,16 +1506,84 @@ end
 local cachedLiveEcs = nil
 local lastEcsGcScanAt = 0
 
+-- Phân biệt thực thể jecs.World đang sống với bảng prototype class World (prototype có rawget(t, "query") == function nhưng không có entity_index/archetypes)
+local function IsValidWorldInstance(t)
+    if type(t) ~= "table" then return false end
+    if getmetatable(t) == nil then return false end
+    if rawget(t, "query") ~= nil then return false end
+    if rawget(t, "entity_index") == nil and rawget(t, "archetypes") == nil then
+        return false
+    end
+    local ok, hasMethods = pcall(function()
+        return typeof(t.query) == "function"
+            and typeof(t.contains) == "function"
+            and typeof(t.get) == "function"
+            and typeof(t.has) == "function"
+    end)
+    return ok and hasMethods == true
+end
+
+-- Phân biệt thực thể replecs ClientReplicator đang sống với bảng prototype class ClientReplicator (thực thể thật có rawget(t, "world") là jecs.World instance)
+local function IsValidReplicatorInstance(t, expectedWorld)
+    if type(t) ~= "table" then return false end
+    if getmetatable(t) == nil then return false end
+    if rawget(t, "get_server_entity") ~= nil then return false end
+    local repWorld = rawget(t, "world")
+    if not IsValidWorldInstance(repWorld) then
+        return false
+    end
+    if expectedWorld and repWorld ~= expectedWorld then
+        return false
+    end
+    local ok, hasMethods = pcall(function()
+        return typeof(t.get_server_entity) == "function"
+            and typeof(t.get_client_entity) == "function"
+    end)
+    return ok and hasMethods == true
+end
+
+local function IsValidComponentsTable(t)
+    return type(t) == "table"
+        and rawget(t, "Player") ~= nil
+        and rawget(t, "CurrentHealth") ~= nil
+        and rawget(t, "Targetable") ~= nil
+        and rawget(t, "Pack") ~= nil
+end
+
+local function ExtractWorldAndComponentsFromClosure(fn, getUpvals)
+    if not (getUpvals and typeof(fn) == "function") then
+        return nil, nil
+    end
+    local okU, uvs = pcall(getUpvals, fn)
+    if not (okU and type(uvs) == "table") then
+        return nil, nil
+    end
+    local wFound, cFound = nil, nil
+    for _, uv in pairs(uvs) do
+        if type(uv) == "table" then
+            if not wFound and IsValidWorldInstance(uv) then
+                wFound = uv
+            elseif not cFound and IsValidComponentsTable(uv) then
+                cFound = uv
+            end
+        end
+    end
+    return wFound, cFound
+end
+
 local function FindLiveEcsContext()
-    if cachedLiveEcs and cachedLiveEcs.world and cachedLiveEcs.Components and cachedLiveEcs.Packs and cachedLiveEcs.replicator then
+    if cachedLiveEcs
+        and IsValidWorldInstance(cachedLiveEcs.world)
+        and IsValidReplicatorInstance(cachedLiveEcs.replicator, cachedLiveEcs.world)
+        and cachedLiveEcs.Components
+        and cachedLiveEcs.Packs then
         return cachedLiveEcs.world, cachedLiveEcs.Components, cachedLiveEcs.Packs, cachedLiveEcs.replicator, cachedLiveEcs.TeamUtils
     end
-    if os.clock() - lastEcsGcScanAt < 3.0 and cachedLiveEcs then
+    if os.clock() - lastEcsGcScanAt < 2.0 and cachedLiveEcs then
         return cachedLiveEcs.world, cachedLiveEcs.Components, cachedLiveEcs.Packs, cachedLiveEcs.replicator, cachedLiveEcs.TeamUtils
     end
     lastEcsGcScanAt = os.clock()
 
-    local liveWorld, liveComponents, livePacks, liveReplicator, liveTeamUtils = nil, nil, nil, nil, nil
     local getConns = (typeof(getconnections) == "function" and getconnections)
         or (typeof(get_signal_connections) == "function" and get_signal_connections)
         or nil
@@ -1516,26 +1591,33 @@ local function FindLiveEcsContext()
         or (typeof(getupvalues) == "function" and getupvalues)
         or nil
 
-    -- 1. Bắt trực tiếp live replicator, world, Components từ kết nối Network.Entity_PlayAnimation.OnClientEvent (O(1))
+    local liveWorld, liveComponents, livePacks, liveReplicator, liveTeamUtils = nil, nil, nil, nil, nil
+
+    -- 1. Bắt trực tiếp live replicator, world, Components từ kết nối OnClientEvent đang chạy của game (O(1))
     if getConns and getUpvals then
-        local animRemote = GetNetworkRemote("Entity_PlayAnimation")
-        if animRemote and animRemote:IsA("RemoteEvent") then
-            local okC, conns = pcall(getConns, animRemote.OnClientEvent)
-            EnsureHighIdentity()
-            if okC and type(conns) == "table" then
-                for _, conn in ipairs(conns) do
-                    local fn = type(conn) == "table" and (conn.Function or conn.Callback) or (typeof(conn) == "userdata" and pcall(function() return conn.Function end) and conn.Function) or nil
-                    if typeof(fn) == "function" then
-                        local okU, upvals = pcall(getUpvals, fn)
-                        if okU and type(upvals) == "table" then
-                            for _, uv in pairs(upvals) do
-                                if type(uv) == "table" then
-                                    if typeof(rawget(uv, "get_server_entity")) == "function" and typeof(rawget(uv, "get_client_entity")) == "function" then
-                                        liveReplicator = uv
-                                    elseif typeof(rawget(uv, "query")) == "function" and typeof(rawget(uv, "contains")) == "function" then
-                                        liveWorld = uv
-                                    elseif rawget(uv, "Player") ~= nil and rawget(uv, "CurrentHealth") ~= nil and rawget(uv, "Pack") ~= nil then
-                                        liveComponents = uv
+        for _, remoteName in ipairs({ "Entity_PlayAnimation", "Entity_PlayEffect", "StageScene_Shout", "Action_Bark" }) do
+            local rem = GetNetworkRemote(remoteName)
+            if rem and rem:IsA("RemoteEvent") then
+                local okC, conns = pcall(getConns, rem.OnClientEvent)
+                EnsureHighIdentity()
+                if okC and type(conns) == "table" then
+                    for _, conn in ipairs(conns) do
+                        local fn = type(conn) == "table" and (conn.Function or conn.Callback)
+                            or (typeof(conn) == "userdata" and pcall(function() return conn.Function end) and conn.Function)
+                            or nil
+                        if typeof(fn) == "function" then
+                            local okU, upvals = pcall(getUpvals, fn)
+                            if okU and type(upvals) == "table" then
+                                for _, uv in pairs(upvals) do
+                                    if type(uv) == "table" then
+                                        if not liveReplicator and IsValidReplicatorInstance(uv, liveWorld) then
+                                            liveReplicator = uv
+                                            liveWorld = liveWorld or rawget(uv, "world")
+                                        elseif not liveWorld and IsValidWorldInstance(uv) then
+                                            liveWorld = uv
+                                        elseif not liveComponents and IsValidComponentsTable(uv) then
+                                            liveComponents = uv
+                                        end
                                     end
                                 end
                             end
@@ -1543,46 +1625,79 @@ local function FindLiveEcsContext()
                     end
                 end
             end
+            if liveWorld and liveReplicator and liveComponents then
+                break
+            end
         end
     end
 
-    -- 2. Tìm live Packs & TeamUtils (và world/Components/replicator nếu thiếu) trong GC
-    local gcFn = (typeof(getgc) == "function" and getgc) or nil
-    if gcFn then
-        local okGc, list = pcall(gcFn, true)
-        EnsureHighIdentity()
-        if okGc and type(list) == "table" then
-            for i = 1, #list do
-                local obj = list[i]
-                if type(obj) == "table" then
-                    if typeof(rawget(obj, "activeSummaries")) == "function" and typeof(rawget(obj, "isLivePack")) == "function" then
-                        if getUpvals then
-                            local okU, uvs = pcall(getUpvals, rawget(obj, "isLivePack"))
-                            if okU and type(uvs) == "table" then
-                                local wCandidate, cCandidate = nil, nil
-                                for _, uv in pairs(uvs) do
-                                    if type(uv) == "table" then
-                                        if typeof(rawget(uv, "query")) == "function" and typeof(rawget(uv, "contains")) == "function" then
-                                            wCandidate = uv
-                                        elseif rawget(uv, "Player") ~= nil and rawget(uv, "Pack") ~= nil then
-                                            cCandidate = uv
-                                        end
-                                    end
-                                end
-                                if (liveWorld and wCandidate == liveWorld) or (not livePacks and wCandidate and cCandidate) then
-                                    livePacks = obj
-                                    if not liveWorld then liveWorld = wCandidate end
-                                    if not liveComponents then liveComponents = cCandidate end
-                                end
+    -- 2. Kiểm tra các module nạp qua GetGameModule (SafeRequire ở Identity 2)
+    local modWorld = GetGameModule("ecs_world", { "Shared", "ecs", "world" })
+    local modComponents = GetGameModule("Components", { "Shared", "Components" })
+    local modPacks = GetGameModule("Packs", { "Shared", "combat", "Packs" })
+    local modReplicator = GetGameModule("replicator", { "Client", "replicator" })
+    local modTeamUtils = GetGameModule("TeamUtils", { "Shared", "utils", "TeamUtils" })
+
+    if type(modPacks) == "table" and typeof(modPacks.isLivePack) == "function" and getUpvals then
+        local packW, packC = ExtractWorldAndComponentsFromClosure(modPacks.isLivePack, getUpvals)
+        if packW and (not liveWorld or packW == liveWorld) then
+            liveWorld = liveWorld or packW
+            liveComponents = liveComponents or packC
+            livePacks = modPacks
+        end
+    end
+
+    if not liveWorld and IsValidWorldInstance(modWorld) then
+        liveWorld = modWorld
+    end
+    if not liveComponents and IsValidComponentsTable(modComponents) then
+        liveComponents = modComponents
+    end
+    if not liveReplicator and IsValidReplicatorInstance(modReplicator, liveWorld) then
+        liveReplicator = modReplicator
+        liveWorld = liveWorld or rawget(modReplicator, "world")
+    end
+    if not livePacks and type(modPacks) == "table" and (not liveWorld or modWorld == liveWorld) then
+        livePacks = modPacks
+    end
+    if not liveTeamUtils and type(modTeamUtils) == "table" and (not liveWorld or modWorld == liveWorld) then
+        liveTeamUtils = modTeamUtils
+    end
+
+    -- 3. Nếu Executor tách cache require() khiến thiếu livePacks / liveReplicator / liveTeamUtils của đúng liveWorld, quét GC với bộ lọc instance chuẩn
+    if not (liveWorld and liveComponents and livePacks and liveReplicator) then
+        local gcFn = (typeof(getgc) == "function" and getgc) or nil
+        if gcFn then
+            local okGc, list = pcall(gcFn, true)
+            EnsureHighIdentity()
+            if okGc and type(list) == "table" then
+                for i = 1, #list do
+                    local obj = list[i]
+                    if type(obj) == "table" then
+                        if not liveReplicator and IsValidReplicatorInstance(obj, liveWorld) then
+                            liveReplicator = obj
+                            liveWorld = liveWorld or rawget(obj, "world")
+                        elseif typeof(rawget(obj, "activeSummaries")) == "function" and typeof(rawget(obj, "isLivePack")) == "function" then
+                            local wCandidate, cCandidate = ExtractWorldAndComponentsFromClosure(rawget(obj, "isLivePack"), getUpvals)
+                            if wCandidate and (not liveWorld or wCandidate == liveWorld) then
+                                livePacks = obj
+                                liveWorld = liveWorld or wCandidate
+                                liveComponents = liveComponents or cCandidate
+                            elseif not livePacks then
+                                livePacks = obj
                             end
+                        elseif not liveTeamUtils and typeof(rawget(obj, "areEntitiesHostile")) == "function" then
+                            if getUpvals then
+                                local wCandidate = ExtractWorldAndComponentsFromClosure(rawget(obj, "areEntitiesHostile"), getUpvals)
+                                if not liveWorld or not wCandidate or wCandidate == liveWorld then
+                                    liveTeamUtils = obj
+                                end
+                            else
+                                liveTeamUtils = obj
+                            end
+                        elseif not liveComponents and IsValidComponentsTable(obj) then
+                            liveComponents = obj
                         end
-                        if not livePacks then
-                            livePacks = obj
-                        end
-                    elseif not liveReplicator and typeof(rawget(obj, "get_server_entity")) == "function" and typeof(rawget(obj, "get_client_entity")) == "function" then
-                        liveReplicator = obj
-                    elseif not liveTeamUtils and typeof(rawget(obj, "areEntitiesHostile")) == "function" then
-                        liveTeamUtils = obj
                     end
                 end
             end
@@ -1590,11 +1705,15 @@ local function FindLiveEcsContext()
     end
     EnsureHighIdentity()
 
-    liveWorld = liveWorld or GetGameModule("ecs_world", { "Shared", "ecs", "world" })
-    liveComponents = liveComponents or GetGameModule("Components", { "Shared", "Components" })
-    livePacks = livePacks or GetGameModule("Packs", { "Shared", "combat", "Packs" })
-    liveReplicator = liveReplicator or GetGameModule("replicator", { "Client", "replicator" })
-    liveTeamUtils = liveTeamUtils or GetGameModule("TeamUtils", { "Shared", "utils", "TeamUtils" })
+    liveWorld = (IsValidWorldInstance(liveWorld) and liveWorld) or (IsValidWorldInstance(modWorld) and modWorld) or nil
+    liveComponents = liveComponents or modComponents
+    livePacks = livePacks or modPacks
+    liveReplicator = (IsValidReplicatorInstance(liveReplicator, liveWorld) and liveReplicator)
+        or (IsValidReplicatorInstance(modReplicator, liveWorld) and modReplicator)
+        or (IsValidReplicatorInstance(liveReplicator, nil) and liveReplicator)
+        or (IsValidReplicatorInstance(modReplicator, nil) and modReplicator)
+        or nil
+    liveTeamUtils = liveTeamUtils or modTeamUtils
 
     if liveWorld and liveComponents and livePacks and liveReplicator then
         cachedLiveEcs = {
@@ -1694,7 +1813,8 @@ local function EvaluateHostilePack(world, Components, TeamUtils, localEntity, lo
                 if type(charId) == "string" and not sampleCharId then
                     sampleCharId = charId
                 end
-                if Components.Boss and world:has(member, Components.Boss) then
+                if (Components.Boss and world:has(member, Components.Boss))
+                    or (Components.OverworldBoss and world:has(member, Components.OverworldBoss)) then
                     hasBoss = true
                 end
 
@@ -2068,6 +2188,29 @@ local function CheckTeamRecoveryPause()
     return false, nil
 end
 
+local function IsPlayerPackAlreadyEngaging(world, Components, Packs, localEntity, targetPack)
+    if not (world and Components and Packs and targetPack) then
+        return false
+    end
+    local hostileFocus = GetGameModule("HostileFocus", { "Client", "HostileFocus" })
+    if type(hostileFocus) == "table" and typeof(hostileFocus.resolve) == "function" then
+        local okF, focus = SafeCallGame(hostileFocus.resolve)
+        if okF and type(focus) == "table" and type(focus.packSet) == "table" and focus.packSet[targetPack] == true then
+            return true
+        end
+    end
+    if localEntity and typeof(Packs.ownedPack) == "function" and Components.PackAttackOrder then
+        local okP, playerPack = SafeCallGame(Packs.ownedPack, localEntity)
+        if okP and playerPack then
+            local okT, currentOrder = pcall(world.target, world, playerPack, Components.PackAttackOrder)
+            if okT and currentOrder == targetPack then
+                return true
+            end
+        end
+    end
+    return false
+end
+
 local function TryEngageNearestPack(forceTeleportInRun)
     local hrp = GetRootPart()
     if not hrp then return false, "chưa có nhân vật" end
@@ -2077,7 +2220,8 @@ local function TryEngageNearestPack(forceTeleportInRun)
         return false, healReason
     end
 
-    local isOverworld = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld") == "overworld"
+    local gamemode = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld")
+    local isOverworld = (gamemode == "overworld")
     if isOverworld and Config.AutoTravelToCombatWorld and not Config.AutoWorldNpcQuestLoop then
         if not IsAlreadyInOverworldArea(Config.CombatWorld) and os.clock() - Session.lastQuestTravelAt > 6 then
             Session.lastQuestTravelAt = os.clock()
@@ -2099,38 +2243,51 @@ local function TryEngageNearestPack(forceTeleportInRun)
         return false, "không đọc được Packs.activeSummaries"
     end
 
-    local bestPack, bestSummary, bestDist, bestIsBoss, bestCharId = nil, nil, math.huge, false, nil
     local hasQuestOverride = isOverworld and (Session.questOverrideMobIds ~= nil or Session.questOverrideElement ~= nil)
     local isQuestAutoCombat = Config.AutoWorldNpcQuestLoop and (not isOverworld or Session.questCombatActive or hasQuestOverride)
-    local forceTele = (forceTeleportInRun == true) or isQuestAutoCombat
+    local inRunMode = not isOverworld
+    local forceTele = inRunMode or (forceTeleportInRun == true) or isQuestAutoCombat
     local maxDist = (forceTele and 5000)
         or (hasQuestOverride and math.max(tonumber(Config.EngageMaxDist) or 150, 5000))
         or (tonumber(Config.EngageMaxDist) or 150)
     local myPos = hrp.Position
 
-    -- Tìm theo bộ lọc (Multi Quái hoặc Mục Tiêu Quest)
-    for packEntity, summary in pairs(summaries) do
-        if typeof(summary.centroid) == "Vector3" then
-            local valid, isBoss, sampleChar = EvaluateHostilePack(world, Components, TeamUtils, localEntity, localTeam, summary, forceTele)
-            if valid then
-                local dist = (summary.centroid - myPos).Magnitude
-                if dist <= maxDist then
-                    local take = false
-                    if Config.PrioritizeBoss and isBoss and not bestIsBoss then
-                        take = true
-                    elseif (not Config.PrioritizeBoss or isBoss == bestIsBoss) and dist < bestDist then
-                        take = true
-                    end
-                    if take then
-                        bestPack = packEntity
-                        bestSummary = summary
-                        bestDist = dist
-                        bestIsBoss = isBoss
-                        bestCharId = sampleChar
+    local function selectBestPack(ignoreFilterFlag)
+        local bPack, bSummary, bDist, bFlatDist, bIsBoss, bCharId = nil, nil, math.huge, math.huge, false, nil
+        for packEntity, summary in pairs(summaries) do
+            if typeof(summary.centroid) == "Vector3" then
+                local valid, isBoss, sampleChar = EvaluateHostilePack(world, Components, TeamUtils, localEntity, localTeam, summary, ignoreFilterFlag)
+                if valid then
+                    local delta = summary.centroid - myPos
+                    local dist = delta.Magnitude
+                    local flatDist = math.sqrt(delta.X * delta.X + delta.Z * delta.Z)
+                    if dist <= maxDist then
+                        local take = false
+                        if Config.PrioritizeBoss and isBoss and not bIsBoss then
+                            take = true
+                        elseif (not Config.PrioritizeBoss or isBoss == bIsBoss) and dist < bDist then
+                            take = true
+                        end
+                        if take then
+                            bPack = packEntity
+                            bSummary = summary
+                            bDist = dist
+                            bFlatDist = flatDist
+                            bIsBoss = isBoss
+                            bCharId = sampleChar
+                        end
                     end
                 end
             end
         end
+        return bPack, bSummary, bDist, bFlatDist, bIsBoss, bCharId
+    end
+
+    -- Trong Raid/Stage/Boss/Defense luôn bỏ qua bộ lọc quái Overworld; ở Overworld thì lọc theo Quest hoặc Multi Quái trước
+    local bestPack, bestSummary, bestDist, bestFlatDist, bestIsBoss, bestCharId = selectBestPack(inRunMode)
+    if not bestPack and isOverworld and hasQuestOverride then
+        -- Nếu bãi quái mục tiêu Quest đang chờ hồi sinh, đánh tạm bãi quái gần nhất để không đứng im
+        bestPack, bestSummary, bestDist, bestFlatDist, bestIsBoss, bestCharId = selectBestPack(true)
     end
 
     if not (bestPack and bestSummary) then
@@ -2142,21 +2299,25 @@ local function TryEngageNearestPack(forceTeleportInRun)
         return false, "chưa đồng bộ serverEntity của pack"
     end
 
-    local shouldTeleport = (Config.TeleportToPack or forceTele or (hasQuestOverride and bestDist > (tonumber(Config.EngageMaxDist) or 150)))
-    if shouldTeleport and bestDist > 18 then
+    -- Server kiểm tra vector.flatten(centroid - playerPos).Magnitude <= CombatConfig.ATTACK_ORDER.MAX_DISTANCE (40 studs).
+    -- Nếu mục tiêu nằm ngoài 34 studs ngang (hoặc bật Tele / đang trong Run / làm Quest), tự động tiếp cận vào tầm 10 studs trước khi gửi EngagePack.
+    local maxOrderRange = tonumber(C.AttackOrderMaxDistance) or 40
+    local needsRangeApproach = bestFlatDist > (maxOrderRange - 6)
+    local shouldTeleport = Config.TeleportToPack or forceTele or needsRangeApproach or (hasQuestOverride and bestDist > (tonumber(Config.EngageMaxDist) or 150))
+    if shouldTeleport and (bestFlatDist > 16 or bestDist > 22) then
         local dir = (myPos - bestSummary.centroid)
         local flatDir = Vector3.new(dir.X, 0, dir.Z)
         local offset = flatDir.Magnitude > 0.5 and (flatDir.Unit * 10) or Vector3.new(0, 0, 10)
         TeleportCharacterTo(bestSummary.centroid + offset)
-        task.wait(0.08)
+        task.wait(0.12)
     end
 
     local now = os.clock()
-    local alreadyFightingSamePack = (Session.lastPackEntity == serverEntity)
-        and (now - Session.lastPackTime < 1.2)
-        and (tostring(LocalPlayer:GetAttribute("OverworldCombatState") or "") == "combat")
+    local alreadyEngaged = IsPlayerPackAlreadyEngaging(world, Components, Packs, localEntity, bestPack)
+        and (Session.lastPackEntity == serverEntity)
+        and (now - Session.lastPackTime < 1.5)
 
-    if not alreadyFightingSamePack then
+    if not alreadyEngaged then
         FireRemote("EngagePack", serverEntity)
         Session.lastPackEntity = serverEntity
         Session.lastPackTime = now
@@ -2331,7 +2492,42 @@ local function ConnectNetworkEventListeners()
     if matchSnap and matchSnap:IsA("RemoteEvent") then
         TrackConnection(matchSnap.OnClientEvent:Connect(function(snapshot)
             if type(snapshot) == "table" then
+                if snapshot.runId and snapshot.runId ~= Session.currentRunId then
+                    Session.currentRunId = snapshot.runId
+                    Session.matchOutcome = nil
+                    Session.currentVoteOption = nil
+                    Session.lastVotedRunId = nil
+                    Session.lastVotedChoice = nil
+                end
                 Session.matchSnapshot = snapshot
+                if type(snapshot.status) == "string" and snapshot.status ~= "ongoing" then
+                    Session.matchOutcome = snapshot.status
+                end
+            end
+        end))
+    end
+
+    local matchVoteState = GetNetworkRemote("MatchResults_VoteState")
+    if matchVoteState and matchVoteState:IsA("RemoteEvent") then
+        TrackConnection(matchVoteState.OnClientEvent:Connect(function(voteState)
+            if type(voteState) == "table" and type(voteState.votes) == "table" then
+                local myVote = nil
+                for _, entry in ipairs(voteState.votes) do
+                    if type(entry) == "table" and entry.userId == LocalPlayer.UserId and not entry.resolved then
+                        myVote = entry.option
+                        break
+                    end
+                end
+                Session.currentVoteOption = myVote
+            end
+        end))
+    end
+
+    local matchBanner = GetNetworkRemote("MatchResults_OutcomeBanner")
+    if matchBanner and matchBanner:IsA("RemoteEvent") then
+        TrackConnection(matchBanner.OnClientEvent:Connect(function(outcome)
+            if type(outcome) == "string" and outcome ~= "ongoing" then
+                Session.matchOutcome = outcome
             end
         end))
     end
@@ -2340,6 +2536,10 @@ local function ConnectNetworkEventListeners()
     if runReset and runReset:IsA("RemoteEvent") then
         TrackConnection(runReset.OnClientEvent:Connect(function()
             Session.matchSnapshot = nil
+            Session.matchOutcome = nil
+            Session.currentVoteOption = nil
+            Session.lastVotedRunId = nil
+            Session.lastVotedChoice = nil
             table.clear(Session.openedChests)
         end))
     end
@@ -2422,13 +2622,61 @@ end
 -- ============================================================================
 -- [7] BOSS, STORY MISSION, QUESTGO, SMART RAID CARDS, DEFENSE & MATCH RESULTS
 -- ============================================================================
+local function FindBossGateModelInWorkspace(worldId)
+    for _, inst in ipairs(CollectionService:GetTagged("BossGate")) do
+        if inst:IsA("Model") and inst:IsDescendantOf(Workspace) and inst:GetAttribute("WorldId") == worldId then
+            return inst
+        end
+    end
+    return nil
+end
+
 local function ChallengeSelectedBoss(worldId)
-    local targetWorld = worldId or Config.SelectedBossWorld
+    local targetWorld = tostring(worldId or Config.SelectedBossWorld or "alien")
+    if tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld") ~= "overworld" then
+        return false, "đang ở trong màn chơi khác"
+    end
+
+    local portalRepairId = targetWorld .. "_boss_portal"
+    local repairedMap = ReadStore("Repaired", "table", true)
+    if not ((type(repairedMap) == "table" and repairedMap[portalRepairId] == true) or Session.knownRepaired[portalRepairId] == true) then
+        RepairSingle(portalRepairId)
+    end
+
+    -- 1. Thử gửi ChallengeBoss trực tiếp
     local pOk, ok, err = InvokeRemote("ChallengeBoss", targetWorld)
-    if pOk and ok ~= false then
+    if pOk and ok == true then
         return true, "Đã vào Boss " .. tostring(targetWorld)
     end
-    return false, tostring(err or ok or "bị từ chối")
+
+    -- 2. Nếu bị từ chối vì chưa đứng tại BossGate hoặc chưa ở đúng World: warp thẳng tới "gate:<worldId>" rồi khiêu chiến lại
+    if os.clock() - (Session.lastBossWarpAt or 0) >= 2.0 then
+        Session.lastBossWarpAt = os.clock()
+        local wOk, pose = InvokeRemote("HubWarp_Request", "gate:" .. targetWorld)
+        if wOk and typeof(pose) == "CFrame" then
+            TeleportCharacterTo(pose)
+            Session.lastKnownArea = targetWorld
+            Session.lastSuccessfulTravelAt = os.clock()
+            task.wait(0.18)
+        else
+            if not IsAlreadyInOverworldArea(targetWorld) then
+                TravelToWorld(targetWorld, true)
+                task.wait(0.2)
+            end
+            local gateModel = FindBossGateModelInWorkspace(targetWorld)
+            if gateModel then
+                TeleportCharacterTo(gateModel:GetPivot().Position + Vector3.new(0, 3, 6))
+                task.wait(0.15)
+            end
+        end
+        RepairSingle(portalRepairId)
+        pOk, ok, err = InvokeRemote("ChallengeBoss", targetWorld)
+        if pOk and ok == true then
+            return true, "Đã warp tới cổng & vào Boss " .. tostring(targetWorld)
+        end
+    end
+
+    return false, tostring(err or ok or "chưa mở cổng Boss hoặc đang hồi")
 end
 
 local function RunActiveQuestGo()
@@ -2451,21 +2699,143 @@ local function RunActiveQuestGo()
     return false, "không có nhiệm vụ đang nhận để điều hướng"
 end
 
+-- Chỉ gửi Lobby_SetChosenMission / Lobby_SetChosenChallenge khi phòng chờ chưa chọn đúng màn,
+-- tránh tự reset đếm ngược 5 giây (countdownEndsAt) của Lobby mỗi chu kỳ lặp!
+local function QueueLobbyGamemodeAndReady(gamemodeId, missionId, raidBaseId, raidTier)
+    if tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld") ~= "overworld" then
+        return false, "đang ở trong màn chơi"
+    end
+    local lobby = nil
+    local lobbySvc = GetGameModule("ClientLobbyService", { "Client", "services", "ClientLobbyService" })
+    local fusion = GetGameModule("Fusion", { "Packages", "Fusion" })
+    if type(lobbySvc) == "table" and lobbySvc.CurrentLobby and type(fusion) == "table" and typeof(fusion.peek) == "function" then
+        local okL, st = SafeCallGame(fusion.peek, lobbySvc.CurrentLobby)
+        if okL then
+            lobby = st
+            Session.currentLobby = st
+        end
+    else
+        lobby = Session.currentLobby
+    end
+
+    local isAlreadySelected = false
+    if type(lobby) == "table" and lobby.gamemodeId == gamemodeId and type(lobby.gamemodeData) == "table" then
+        if gamemodeId == "stage" then
+            local curMission = lobby.gamemodeData.missionId or lobby.gamemodeData.mission
+            isAlreadySelected = (curMission == missionId)
+        elseif gamemodeId == "raid" then
+            isAlreadySelected = (lobby.gamemodeData.baseId == raidBaseId)
+                and (tonumber(lobby.gamemodeData.tier) == tonumber(raidTier))
+        end
+    end
+
+    if not isAlreadySelected then
+        if gamemodeId == "stage" then
+            if type(lobbySvc) == "table" and typeof(lobbySvc.OpenMission) == "function" then
+                SafeCallGame(lobbySvc.OpenMission, missionId)
+            else
+                FireRemote("Lobby_SetChosenMission", missionId)
+            end
+        elseif gamemodeId == "raid" then
+            FireRemote("Lobby_SetChosenChallenge", raidBaseId, tonumber(raidTier) or 1)
+        end
+        task.wait(0.15)
+        if type(lobbySvc) == "table" and lobbySvc.CurrentLobby and type(fusion) == "table" and typeof(fusion.peek) == "function" then
+            local okL, st = SafeCallGame(fusion.peek, lobbySvc.CurrentLobby)
+            if okL then
+                lobby = st
+                Session.currentLobby = st
+            end
+        end
+    end
+
+    local alreadyReady = false
+    if type(lobby) == "table" then
+        if lobby.countdownEndsAt ~= nil or (type(lobby.state) == "string" and lobby.state ~= "selecting") then
+            alreadyReady = true
+        elseif type(lobby.readyUserIds) == "table" then
+            for _, rUid in ipairs(lobby.readyUserIds) do
+                if rUid == LocalPlayer.UserId then
+                    alreadyReady = true
+                    break
+                end
+            end
+        end
+    end
+
+    if not alreadyReady then
+        FireRemote("Lobby_SetReady", true)
+    end
+
+    if gamemodeId == "stage" then
+        return true, "Đã chọn & sẵn sàng Mission: " .. tostring(missionId)
+    end
+    return true, string.format("Đã chọn & sẵn sàng Raid %s (Tier %d)", tostring(raidBaseId), tonumber(raidTier) or 1)
+end
+
 local function StartSelectedStoryMission(missionId)
     local target = missionId or Config.SelectedMission
-    local lobbySvc = GetGameModule("ClientLobbyService", { "Client", "services", "ClientLobbyService" })
-    if type(lobbySvc) == "table" and typeof(lobbySvc.OpenMission) == "function" then
-        SafeCallGame(lobbySvc.OpenMission, target)
+    return QueueLobbyGamemodeAndReady("stage", target, nil, nil)
+end
+
+local function StartSelectedRaidChallenge(baseId, tier)
+    local targetBase = baseId or Config.SelectedRaidBase
+    local targetTier = tonumber(tier or Config.SelectedRaidTier) or 1
+    return QueueLobbyGamemodeAndReady("raid", nil, targetBase, targetTier)
+end
+
+local function GetLiveMatchSnapshot()
+    if type(Session.matchSnapshot) == "table" then
+        return Session.matchSnapshot
     end
-    FireRemote("Lobby_SetChosenMission", target)
-    task.wait(0.1)
-    FireRemote("Lobby_SetReady", true)
-    return true, "Đã chọn & sẵn sàng Mission: " .. tostring(target)
+    local getConns = (typeof(getconnections) == "function" and getconnections)
+        or (typeof(get_signal_connections) == "function" and get_signal_connections)
+        or nil
+    local getUpvals = (type(debug) == "table" and typeof(debug.getupvalues) == "function" and debug.getupvalues)
+        or (typeof(getupvalues) == "function" and getupvalues)
+        or nil
+    local fusion = GetGameModule("Fusion", { "Packages", "Fusion" })
+    local snapRemote = GetNetworkRemote("MatchResults_Snapshot")
+    if getConns and getUpvals and snapRemote and snapRemote:IsA("RemoteEvent") and type(fusion) == "table" and typeof(fusion.peek) == "function" then
+        local okC, conns = pcall(getConns, snapRemote.OnClientEvent)
+        EnsureHighIdentity()
+        if okC and type(conns) == "table" then
+            for _, conn in ipairs(conns) do
+                local fn = type(conn) == "table" and (conn.Function or conn.Callback)
+                    or (typeof(conn) == "userdata" and pcall(function() return conn.Function end) and conn.Function)
+                    or nil
+                if typeof(fn) == "function" then
+                    local okU, uvs = pcall(getUpvals, fn)
+                    if okU and type(uvs) == "table" then
+                        for _, uv in pairs(uvs) do
+                            if type(uv) == "table" then
+                                local okP, val = SafeCallGame(fusion.peek, uv)
+                                if okP and type(val) == "table" and type(val.status) == "string" and val.gamemodeId ~= nil then
+                                    Session.matchSnapshot = val
+                                    return val
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return Session.matchSnapshot
 end
 
 local function VoteMatchResults(option, forceSend)
-    local snap = Session.matchSnapshot
-    if not forceSend and type(snap) == "table" and snap.status == "ongoing" then
+    local gamemode = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld")
+    if gamemode == "overworld" then
+        return false, "đang ở Overworld"
+    end
+
+    local snap = GetLiveMatchSnapshot()
+    local matchEnded = (type(snap) == "table" and type(snap.status) == "string" and snap.status ~= "ongoing")
+        or (type(Session.matchOutcome) == "string" and Session.matchOutcome ~= "ongoing")
+
+    -- Tuyệt đối không gửi vote khi trận đấu vẫn đang diễn ra (hoặc chưa có snapshot kết thúc trận)
+    if not forceSend and not matchEnded then
         return false, "trận đấu vẫn đang diễn ra"
     end
 
@@ -2489,14 +2859,22 @@ local function VoteMatchResults(option, forceSend)
         end
     end
 
-    local gamemode = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld")
-    -- Trong Raid, ClientMatchResultsService.SetVote("retry") sẽ bật hộp thoại xác nhận "Retry Raid?" thay vì gửi vote ngay
-    if gamemode ~= "raid" or choice ~= "retry" then
-        local mrs = GetGameModule("ClientMatchResultsService", { "Client", "services", "ClientMatchResultsService" })
-        if type(mrs) == "table" and typeof(mrs.SetVote) == "function" then
-            SafeCallGame(mrs.SetVote, choice)
+    local runKey = (type(snap) == "table" and tostring(snap.runId or "")) or tostring(Session.currentRunId or "active")
+    local now = os.clock()
+    -- Không gọi lặp MatchResults_SetVote hay ClientMatchResultsService.SetVote khi đã vote đúng lựa chọn (tránh tự hủy vote / khóa màn hình Depart)
+    if not forceSend then
+        if Session.currentVoteOption == choice then
+            return true, "đã giữ vote " .. tostring(choice)
+        end
+        if Session.lastVotedRunId == runKey and Session.lastVotedChoice == choice and (now - (Session.lastVoteSentAt or 0)) < 4.5 then
+            return true, "đã gửi vote " .. tostring(choice)
         end
     end
+
+    Session.lastVotedRunId = runKey
+    Session.lastVotedChoice = choice
+    Session.lastVoteSentAt = now
+    Session.currentVoteOption = choice
     return FireRemote("MatchResults_SetVote", choice)
 end
 
@@ -3727,9 +4105,7 @@ local function StepWorldNpcQuestEngine(allowEnteringRuns)
                     PullBannerOnce()
                 elseif o.kind == "event" and (o.event == "weekly_challenge_win" or o.event == "raid_win" or o.event == "raid_complete") and allowEnteringRuns and Config.AutoRunQuestMissionsAndBoss then
                     Session.questCombatActive = true
-                    FireRemote("Lobby_SetChosenChallenge", Config.SelectedRaidBase, Config.SelectedRaidTier)
-                    task.wait(0.1)
-                    FireRemote("Lobby_SetReady", true)
+                    StartSelectedRaidChallenge(Config.SelectedRaidBase, Config.SelectedRaidTier)
                     return true
                 else
                     local targetBossWorld = (o.kind == "kill" and type(o.enemyId) == "string") and ResolveWorldOfBossEnemy(o.enemyId) or nil
@@ -3918,9 +4294,9 @@ local lastUniversalQueueAt = 0
 local function StepUniversalModeFarm()
     local gamemode = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld")
 
-    -- Mọi chế độ: nhặt drop, mở rương, đóng popup thưởng
+    -- Mọi chế độ: nhặt drop, mở rương (tự dịch chuyển tới rương khi ở trong màn chơi)
     ScanAndClaimEcsDrops()
-    ScanAndOpenChests()
+    ScanAndOpenChests(gamemode ~= "overworld")
 
     local pausedForHeal, healReason = CheckTeamRecoveryPause()
     if pausedForHeal then
@@ -3934,7 +4310,7 @@ local function StepUniversalModeFarm()
             Session.universalStatusText = "[RAID] Đang chọn thẻ Buff & qua màn kế tiếp..."
             return
         end
-        VoteMatchResults(Config.MatchVoteOption)
+        VoteMatchResults(Config.MatchVoteOption, false)
         local engaged, msg = TryEngageNearestPack(true)
         FireAllEquippedAbilities()
         Session.universalStatusText = engaged and ("[RAID] Đang đánh: " .. tostring(msg)) or "[RAID] Đang chờ đợt quái / kết quả..."
@@ -3944,7 +4320,7 @@ local function StepUniversalModeFarm()
     if gamemode == "defense" then
         FireRemote("PlayerArrival_Presented")
         FireRemote("Defense_RequestNextWave")
-        VoteMatchResults(Config.MatchVoteOption)
+        VoteMatchResults(Config.MatchVoteOption, false)
         local engaged, msg = TryEngageNearestPack(true)
         FireAllEquippedAbilities()
         Session.universalStatusText = engaged and ("[DEFENSE] Đang bảo vệ trụ: " .. tostring(msg)) or "[DEFENSE] Đang gọi đợt quái kế tiếp..."
@@ -3956,8 +4332,9 @@ local function StepUniversalModeFarm()
         FireRemote("StageScene_Continue")
         if Session.lastMissionTalkRunId then
             FireRemote("MissionTalk_Ended", Session.lastMissionTalkRunId)
+            Session.lastMissionTalkRunId = nil
         end
-        VoteMatchResults(Config.MatchVoteOption)
+        VoteMatchResults(Config.MatchVoteOption, false)
         local engaged, msg = TryEngageNearestPack(true)
         FireAllEquippedAbilities()
         Session.universalStatusText = engaged and ("[STAGE/BOSS] Đang chiến đấu: " .. tostring(msg)) or "[STAGE/BOSS] Đang dọn màn & mở rương..."
@@ -3973,23 +4350,20 @@ local function StepUniversalModeFarm()
         return
     end
 
-    if os.clock() - lastUniversalQueueAt >= 3.0 then
+    if os.clock() - lastUniversalQueueAt >= 2.0 then
         lastUniversalQueueAt = os.clock()
         if targetMode == "Vào & Farm World Boss Đã Chọn" then
-            RepairSingle(tostring(Config.SelectedBossWorld) .. "_boss_portal")
-            local _, msg = ChallengeSelectedBoss(Config.SelectedBossWorld)
+            local okBoss, msg = ChallengeSelectedBoss(Config.SelectedBossWorld)
             Session.universalStatusText = "[OVERWORLD -> BOSS] " .. tostring(msg)
-            return
+            if okBoss then
+                return
+            end
         elseif targetMode == "Vào & Farm Raid Đã Chọn" then
-            FireRemote("Lobby_SetChosenChallenge", Config.SelectedRaidBase, Config.SelectedRaidTier)
-            task.wait(0.1)
-            FireRemote("Lobby_SetReady", true)
-            Session.universalStatusText = string.format("[OVERWORLD -> RAID] Đang vào Raid %s (Tier %d)", tostring(Config.SelectedRaidBase), tonumber(Config.SelectedRaidTier) or 1)
-            return
+            local _, msg = StartSelectedRaidChallenge(Config.SelectedRaidBase, Config.SelectedRaidTier)
+            Session.universalStatusText = "[OVERWORLD -> RAID] " .. tostring(msg)
         elseif targetMode == "Vào & Farm Story Mission Đã Chọn" then
-            StartSelectedStoryMission(Config.SelectedMission)
-            Session.universalStatusText = "[OVERWORLD -> MISSION] Đang vào " .. tostring(Config.SelectedMission)
-            return
+            local _, msg = StartSelectedStoryMission(Config.SelectedMission)
+            Session.universalStatusText = "[OVERWORLD -> MISSION] " .. tostring(msg)
         end
     end
 
@@ -5613,7 +5987,8 @@ StartLoop(0.35, function()
         end
     else
         if Config.AutoEngage then
-            TryEngageNearestPack(false)
+            local inRun = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld") ~= "overworld"
+            TryEngageNearestPack(inRun)
         end
         if Config.AutoCollectDrops then
             ScanAndClaimEcsDrops()
