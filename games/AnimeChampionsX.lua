@@ -1,10 +1,10 @@
--- HelmHub | Anime Champions X v1.6
+-- HelmHub | Anime Champions X v1.8
 -- Place: Anime Champions X [RUNS] (PlaceId 79755351995296, UniverseId 10778033190)
 -- Nguồn dữ liệu: dump Anime Champions X PlaceVersion 4. Hằng số dự phòng nằm trong bảng Known và được đọc lại
--- từ ReplicatedStorage.Config.* / ReplicatedStorage.Shared.* lúc chạy qua SafeRequire + EnsureHighIdentity.
--- Trạng thái: đã xử lý triệt để lỗi hạ thread identity (lacking capability Plugin), giới hạn 200 biến local của Luau, tối ưu hiệu năng (Remote/ECS/Store/UI Cache) và nâng cấp toàn diện theo Logic/Rules của game.
+-- từ ReplicatedStorage.Config.* / ReplicatedStorage.Shared.* bất đồng bộ sau khi dựng UI qua SafeRequire + EnsureHighIdentity.
+-- Trạng thái: đã xử lý triệt để lỗi hạ thread identity (lacking capability Plugin), giới hạn 200 biến local của Luau (tách stack frame IIFE), dựng UI tức thì không chờ SafeRequire, tối ưu hiệu năng (Remote/ECS/Store/UI Cache) và nâng cấp toàn diện theo Logic/Rules của game.
 
-local SCRIPT_VERSION = "1.6"
+local SCRIPT_VERSION = "1.8"
 
 local env = (typeof(getgenv) == "function" and getgenv()) or _G
 if env.__HelmACXCleanup and typeof(env.__HelmACXCleanup) == "function" then
@@ -113,17 +113,22 @@ local function LoadUILibrary()
         end
     end
     sources[#sources + 1] = function()
-        return game:HttpGet("https://raw.githubusercontent.com/helmgodmommy/HelmHUB/main/Library/inventory.lua")
+        return game:HttpGet("https://raw.githubusercontent.com/helmgodmommy/HelmHUB/main/Library/inventory.lua?t=" .. tostring(math.floor(tick() / 60)))
     end
 
     for _, fetch in ipairs(sources) do
         local okGet, body = pcall(fetch)
-        if okGet and type(body) == "string" and #body > 1000 and body:sub(1, 1) ~= "<" then
-            local fn = loadstring(body)
-            if fn then
-                local okLib, lib = pcall(fn)
-                if okLib and type(lib) == "table" then
-                    return lib
+        if okGet and type(body) == "string" and #body > 1000 then
+            if body:sub(1, 3) == "\239\187\191" then
+                body = body:sub(4)
+            end
+            if body:sub(1, 1) ~= "<" then
+                local fn = loadstring(body)
+                if fn then
+                    local okLib, lib = pcall(fn)
+                    if okLib and type(lib) == "table" then
+                        return lib
+                    end
                 end
             end
         end
@@ -563,7 +568,7 @@ local function EnrichWorldEnemiesFromRuntime(worldId)
 end
 
 local ConstSource = "hằng số ghim từ dump PlaceVersion 4"
-do
+local function EnrichConstantsFromRuntime()
     local loadedCount = 0
     local traitDefs = GetGameModule("TraitDefs", { "Shared", "TraitDefs" })
     if type(traitDefs) == "table" and typeof(traitDefs.ids) == "function" then
@@ -606,12 +611,15 @@ do
             local releasedWorlds = {}
             local areas = { overworldCfg.CITY_ID or "champion_city" }
             for _, wid in ipairs(wIds) do
-                local comingSoon = false
-                if typeof(overworldCfg.isComingSoon) == "function" then
+                local released = true
+                if typeof(overworldCfg.isWorldReleased) == "function" then
+                    local okRel, isRel = SafeCallGame(overworldCfg.isWorldReleased, wid)
+                    released = (not okRel) or (isRel == true)
+                elseif typeof(overworldCfg.isComingSoon) == "function" then
                     local okCS, isCS = SafeCallGame(overworldCfg.isComingSoon, wid)
-                    comingSoon = okCS and isCS == true
+                    released = not (okCS and isCS == true)
                 end
-                if not comingSoon then
+                if released then
                     releasedWorlds[#releasedWorlds + 1] = wid
                     areas[#areas + 1] = wid
                     SafeCallGame(EnrichWorldEnemiesFromRuntime, wid)
@@ -899,8 +907,7 @@ if accountName == "" then accountName = "default" end
 local GAME_FOLDER_NAME = "Anime Champions X"
 local uiFullyLoaded = false
 local SaveConfig, TriggerSave
-
-do
+(function()
     local configDir = "HelmHub/" .. GAME_FOLDER_NAME
     local configFile = string.format("%s/config_%s.json", configDir, accountName)
     local saveScheduled = false
@@ -948,7 +955,7 @@ do
             Config[k] = v
         end
     end
-end
+end)()
 
 -- ============================================================================
 -- [5] TIỆN ÍCH MẠNG, STORE & NHÂN VẬT
@@ -1013,6 +1020,8 @@ local Session = {
     invitedFriendsMap = {}
 }
 
+local F = {}
+
 local function GetRootPart()
     local char = LocalPlayer.Character
     return char and (char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart)
@@ -1074,7 +1083,7 @@ local function InvokeRemote(name, ...)
 end
 
 local GetPlayerStore, ReadStore
-do
+(function()
     local cachedStore = nil
     local cachedGcRawTable = nil
     local triedStoreInit = false
@@ -1380,7 +1389,7 @@ do
         end
         return val
     end
-end
+end)()
 
 local function FormatNumber(n)
     local num = tonumber(n) or 0
@@ -1396,11 +1405,11 @@ local function FormatDuration(seconds)
 end
 
 -- Lấy danh sách quái chỉ thuộc về World được chọn
-local function GetWorldEnemyList(worldId)
+function F.GetWorldEnemyList(worldId)
     return C.EnemiesByWorld[tostring(worldId or "alien")] or C.EnemiesByWorld.alien
 end
 
-local function GetSelectedMobsKey(worldId)
+function F.GetSelectedMobsKey(worldId)
     local wid = tostring(worldId or Config.CombatWorld or "alien")
     local key = "SelectedMobs_" .. wid
     if Config[key] == nil then
@@ -1409,8 +1418,8 @@ local function GetSelectedMobsKey(worldId)
     return key
 end
 
-local function GetActiveSelectedMobsSet()
-    local key = GetSelectedMobsKey(Config.CombatWorld)
+function F.GetActiveSelectedMobsSet()
+    local key = F.GetSelectedMobsKey(Config.CombatWorld)
     local list = Config[key]
     local set = {}
     local count = 0
@@ -1426,12 +1435,12 @@ local function GetActiveSelectedMobsSet()
 end
 
 -- Lấy danh sách vật phẩm chỉ thuộc về Thương Nhân (Merchant) đang chọn (kèm nhãn tiếng Việt rõ ràng)
-local function FormatMerchantItemOption(itemId)
+function F.FormatMerchantItemOption(itemId)
     local id = tostring(itemId or "")
     return C.MerchantItemLabels[id] or id
 end
 
-local function ResolveMerchantItemId(optionOrId)
+function F.ResolveMerchantItemId(optionOrId)
     local raw = tostring(optionOrId or "")
     if raw == "" then return "" end
     local bracketed = raw:match("%[([^%[%]]+)%]$")
@@ -1451,22 +1460,22 @@ local function ResolveMerchantItemId(optionOrId)
     return raw
 end
 
-local function GetMerchantItemList(merchantId)
+function F.GetMerchantItemList(merchantId)
     local mid = tostring(merchantId or Config.SelectedMerchant or "GoldMerchant")
     local rawList = C.MerchantItemsByMerchant[mid] or C.MerchantItemsByMerchant.GoldMerchant
     local formatted = {}
     local seen = {}
     for _, rawId in ipairs(rawList) do
-        local cleanId = ResolveMerchantItemId(rawId)
+        local cleanId = F.ResolveMerchantItemId(rawId)
         if cleanId ~= "" and not seen[cleanId] then
             seen[cleanId] = true
-            formatted[#formatted + 1] = FormatMerchantItemOption(cleanId)
+            formatted[#formatted + 1] = F.FormatMerchantItemOption(cleanId)
         end
     end
     return formatted
 end
 
-local function GetSelectedMerchantItemsKey(merchantId)
+function F.GetSelectedMerchantItemsKey(merchantId)
     local mid = tostring(merchantId or Config.SelectedMerchant or "GoldMerchant")
     local key = "SelectedMerchantItems_" .. mid
     if Config[key] == nil then
@@ -1475,16 +1484,16 @@ local function GetSelectedMerchantItemsKey(merchantId)
     return key
 end
 
-local function GetActiveSelectedMerchantItemsSet(merchantId)
+function F.GetActiveSelectedMerchantItemsSet(merchantId)
     local mid = tostring(merchantId or Config.SelectedMerchant or "GoldMerchant")
-    local key = GetSelectedMerchantItemsKey(mid)
+    local key = F.GetSelectedMerchantItemsKey(mid)
     local set = {}
     local count = 0
 
     local function addFromList(list)
         if type(list) ~= "table" then return end
         for _, entry in ipairs(list) do
-            local cleanId = ResolveMerchantItemId(entry)
+            local cleanId = F.ResolveMerchantItemId(entry)
             if type(cleanId) == "string" and cleanId ~= "" and not set[cleanId] then
                 set[cleanId] = true
                 count = count + 1
@@ -1508,8 +1517,7 @@ end
 -- ============================================================================
 -- [6] HỆ THỐNG ECS & CHIẾN ĐẤU (LỌC MULTI QUÁI THEO WORLD, ENGAGE PACKS, ABILITIES, DROPS)
 -- ============================================================================
-local GetEcsContext
-do
+(function()
     -- Phân biệt thực thể jecs.World đang sống với bảng prototype class World (prototype có rawget(t, "query") == function nhưng không có entity_index/archetypes)
     local function IsValidWorldInstance(t)
         if type(t) ~= "table" then return false end
@@ -1575,7 +1583,7 @@ do
         return wFound, cFound
     end
 
-    GetEcsContext = function()
+    F.GetEcsContext = function()
         local cached = Session.cachedLiveEcs
         if cached
             and IsValidWorldInstance(cached.world)
@@ -1732,9 +1740,9 @@ do
         end
         return nil
     end
-end
+end)()
 
-local function FindLocalPlayerEntity(world, Components)
+function F.FindLocalPlayerEntity(world, Components)
     if Session.cachedLocalEntity then
         local okHas, stillValid = pcall(function()
             return world:contains(Session.cachedLocalEntity) and world:get(Session.cachedLocalEntity, Components.Player) == LocalPlayer
@@ -1753,7 +1761,7 @@ local function FindLocalPlayerEntity(world, Components)
     return nil
 end
 
-local function GetCharacterElement(characterId)
+function F.GetCharacterElement(characterId)
     if type(characterId) ~= "string" or characterId == "" then return nil end
     local cached = Session.characterElementCache[characterId]
     if cached ~= nil then
@@ -1772,7 +1780,7 @@ local function GetCharacterElement(characterId)
 end
 
 -- Kiểm tra Pack có quái thù địch hợp lệ, đồng thời kiểm tra bộ lọc Multi Quái hoặc mục tiêu Quest
-local function EvaluateHostilePack(world, Components, TeamUtils, localEntity, localTeam, summary, ignoreMobFilter)
+function F.EvaluateHostilePack(world, Components, TeamUtils, localEntity, localTeam, summary, ignoreMobFilter)
     if not (summary and type(summary.members) == "table") then
         return false, false, nil
     end
@@ -1783,7 +1791,7 @@ local function EvaluateHostilePack(world, Components, TeamUtils, localEntity, lo
     local isOverworld = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld") == "overworld"
     local questMobMap = isOverworld and Session.questOverrideMobIds or nil
     local questElem = isOverworld and Session.questOverrideElement or nil
-    local selectedSet, selectedCount = GetActiveSelectedMobsSet()
+    local selectedSet, selectedCount = F.GetActiveSelectedMobsSet()
     -- Khi đang làm nhiệm vụ NPC có mục tiêu quái cụ thể (questMobMap / questElem) hoặc đang ở trong Raid/Mission (ignoreMobFilter),
     -- không để bộ lọc Multi Quái thường chặn mục tiêu nhiệm vụ!
     local useUserMobFilter = (not ignoreMobFilter) and isOverworld and (not questMobMap) and (not questElem) and Config.FilterBySelectedMobs and selectedCount > 0
@@ -1825,7 +1833,7 @@ local function EvaluateHostilePack(world, Components, TeamUtils, localEntity, lo
                         sampleCharId = charId
                     end
                 elseif questElem then
-                    if type(charId) == "string" and GetCharacterElement(charId) == questElem then
+                    if type(charId) == "string" and F.GetCharacterElement(charId) == questElem then
                         matchedFilter = true
                         sampleCharId = charId
                     end
@@ -1852,7 +1860,7 @@ local OverworldAreaCenters = {
     ant = Vector3.new(-8000, 0, 8000)
 }
 
-local function DetectOverworldAreaByPosition()
+function F.DetectOverworldAreaByPosition()
     if tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld") ~= "overworld" then
         return nil
     end
@@ -1883,7 +1891,7 @@ local function DetectOverworldAreaByPosition()
     return bestArea
 end
 
-local function GetCurrentOverworldArea()
+function F.GetCurrentOverworldArea()
     local attrArea = LocalPlayer:GetAttribute(C.OverworldAreaAttribute)
         or LocalPlayer:GetAttribute("OverworldWorldId")
         or LocalPlayer:GetAttribute("OverworldArea")
@@ -1911,7 +1919,7 @@ local function GetCurrentOverworldArea()
         end
     end
 
-    local posArea = DetectOverworldAreaByPosition()
+    local posArea = F.DetectOverworldAreaByPosition()
     if type(posArea) == "string" and posArea ~= "" then
         Session.lastKnownArea = posArea
         return posArea
@@ -1920,14 +1928,14 @@ local function GetCurrentOverworldArea()
     return Session.lastKnownArea or ""
 end
 
-local function IsAlreadyInOverworldArea(targetAreaId)
+function F.IsAlreadyInOverworldArea(targetAreaId)
     if type(targetAreaId) ~= "string" or targetAreaId == "" then
         return true
     end
-    if GetCurrentOverworldArea() == targetAreaId then
+    if F.GetCurrentOverworldArea() == targetAreaId then
         return true
     end
-    if DetectOverworldAreaByPosition() == targetAreaId then
+    if F.DetectOverworldAreaByPosition() == targetAreaId then
         return true
     end
     if Session.lastKnownArea == targetAreaId and (os.clock() - Session.lastSuccessfulTravelAt) < 12 then
@@ -1937,10 +1945,10 @@ local function IsAlreadyInOverworldArea(targetAreaId)
 end
 
 -- Dịch chuyển sang World bằng Overworld_Travel (chặn tự reload khi đã ở đúng World)
-local function TravelToWorld(areaId, silent)
+function F.TravelToWorld(areaId, silent)
     local target = tostring(areaId or Config.SelectedWorld or "")
     if target == "" then return false end
-    if IsAlreadyInOverworldArea(target) then
+    if F.IsAlreadyInOverworldArea(target) then
         Session.lastKnownArea = target
         return true
     end
@@ -1969,7 +1977,7 @@ local function TravelToWorld(areaId, silent)
 end
 
 -- Đánh giá số lượng chiến binh (Unit) đang tử trận (Dying / KnockedOut / HP <= 0) và % máu thấp nhất của đội hình (có cache 0.25s chống quét lặp ECS)
-local function EvaluatePlayerUnitsHealthAndDowned()
+function F.EvaluatePlayerUnitsHealthAndDowned()
     local now = os.clock()
     local hc = Session.healthCache
     if now - Session.lastHealthEvalAt < 0.25 then
@@ -1987,9 +1995,9 @@ local function EvaluatePlayerUnitsHealthAndDowned()
         end
     end
 
-    local world, Components = GetEcsContext()
+    local world, Components = F.GetEcsContext()
     if not rosterList and world and Components and Components.ActiveRoster then
-        local localEntity = FindLocalPlayerEntity(world, Components)
+        local localEntity = F.FindLocalPlayerEntity(world, Components)
         if localEntity then
             local r = world:get(localEntity, Components.ActiveRoster)
             if type(r) == "table" and #r > 0 then
@@ -2082,17 +2090,17 @@ local function EvaluatePlayerUnitsHealthAndDowned()
 end
 
 -- Nếu đang trong chế độ hồi phục mà nhân vật đứng quá sát bãi quái ở Overworld, lùi nhẹ ra ngoài tầm đánh để game tự hồi sinh & bơm máu
-local function StepBackFromNearestHostilePackForRecovery()
+function F.StepBackFromNearestHostilePackForRecovery()
     if not Config.StepBackOnRecovery then return end
     if tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld") ~= "overworld" then return end
     if os.clock() - Session.lastRecoveryStepBackAt < 2.0 then return end
 
     local hrp = GetRootPart()
     if not hrp then return end
-    local world, Components, Packs, _, TeamUtils = GetEcsContext()
+    local world, Components, Packs, _, TeamUtils = F.GetEcsContext()
     if not (world and Packs) then return end
 
-    local localEntity = FindLocalPlayerEntity(world, Components)
+    local localEntity = F.FindLocalPlayerEntity(world, Components)
     local localTeam = localEntity and Components.Team and world:get(localEntity, Components.Team) or "Players"
     local okSum, summaries = SafeCallGame(Packs.activeSummaries)
     if not (okSum and type(summaries) == "table") then return end
@@ -2101,7 +2109,7 @@ local function StepBackFromNearestHostilePackForRecovery()
     local nearestCentroid, nearestDist = nil, math.huge
     for _, summary in pairs(summaries) do
         if typeof(summary.centroid) == "Vector3" and summary.team ~= localTeam then
-            local valid = EvaluateHostilePack(world, Components, TeamUtils, localEntity, localTeam, summary, true)
+            local valid = F.EvaluateHostilePack(world, Components, TeamUtils, localEntity, localTeam, summary, true)
             if valid then
                 local dist = (summary.centroid - myPos).Magnitude
                 if dist < nearestDist then
@@ -2122,8 +2130,8 @@ end
 
 -- Cơ chế bảo vệ đội hình: nếu số unit chết >= ngưỡng (mặc định 2), tạm dừng toàn bộ chiến đấu & nhiệm vụ,
 -- gọi RetreatUnits và chờ toàn bộ unit hồi sinh + bơm đầy 100% máu rồi mới tiếp tục.
-local function CheckTeamRecoveryPause()
-    local downCount, totalUnits, minHpPct, avgHpPct, foundUnits = EvaluatePlayerUnitsHealthAndDowned()
+function F.CheckTeamRecoveryPause()
+    local downCount, totalUnits, minHpPct, avgHpPct, foundUnits = F.EvaluatePlayerUnitsHealthAndDowned()
     local minPctInt = math.floor(minHpPct * 100 + 0.5)
     local avgPctInt = math.floor(avgHpPct * 100 + 0.5)
 
@@ -2146,7 +2154,7 @@ local function CheckTeamRecoveryPause()
             if Config.AutoInGameAttack then
                 FireRemote("SetAutoAttack", false)
             end
-            StepBackFromNearestHostilePackForRecovery()
+            F.StepBackFromNearestHostilePackForRecovery()
             Notify("Tạm Dừng Hồi Phục Đội Hình", string.format("Có %d/%d unit tử trận! Tạm dừng mọi chiến đấu & nhiệm vụ chờ hồi sinh và bơm đầy 100%% máu.", downCount, totalUnits), 4)
         end
     end
@@ -2171,7 +2179,7 @@ local function CheckTeamRecoveryPause()
                 FireRemote("SetAutoAttack", false)
             end
         end
-        StepBackFromNearestHostilePackForRecovery()
+        F.StepBackFromNearestHostilePackForRecovery()
 
         local reason = string.format("Đang chờ unit hồi sinh & bơm 100%% máu (%d/%d chết | Máu thấp nhất: %d%%)", downCount, totalUnits, minPctInt)
         Session.unitHealthSummaryText = "[ĐANG HỒI PHỤC] " .. reason
@@ -2182,11 +2190,11 @@ local function CheckTeamRecoveryPause()
     return false, nil
 end
 
-local function TryEngageNearestPack(forceTeleportInRun)
+function F.TryEngageNearestPack(forceTeleportInRun)
     local hrp = GetRootPart()
     if not hrp then return false, "chưa có nhân vật" end
 
-    local pausedForHeal, healReason = CheckTeamRecoveryPause()
+    local pausedForHeal, healReason = F.CheckTeamRecoveryPause()
     if pausedForHeal then
         return false, healReason
     end
@@ -2194,19 +2202,19 @@ local function TryEngageNearestPack(forceTeleportInRun)
     local gamemode = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld")
     local isOverworld = (gamemode == "overworld")
     if isOverworld and Config.AutoTravelToCombatWorld and not Config.AutoWorldNpcQuestLoop then
-        if not IsAlreadyInOverworldArea(Config.CombatWorld) and os.clock() - Session.lastQuestTravelAt > 6 then
+        if not F.IsAlreadyInOverworldArea(Config.CombatWorld) and os.clock() - Session.lastQuestTravelAt > 6 then
             Session.lastQuestTravelAt = os.clock()
-            TravelToWorld(Config.CombatWorld, true)
+            F.TravelToWorld(Config.CombatWorld, true)
             return false, "đang chuyển sang World " .. tostring(Config.CombatWorld)
         end
     end
 
-    local world, Components, Packs, replicator, TeamUtils = GetEcsContext()
+    local world, Components, Packs, replicator, TeamUtils = F.GetEcsContext()
     if not world then
         return false, "chưa nạp được ECS world"
     end
 
-    local localEntity = FindLocalPlayerEntity(world, Components)
+    local localEntity = F.FindLocalPlayerEntity(world, Components)
     local localTeam = localEntity and Components.Team and world:get(localEntity, Components.Team) or "Players"
 
     local okSum, summaries = SafeCallGame(Packs.activeSummaries)
@@ -2227,7 +2235,7 @@ local function TryEngageNearestPack(forceTeleportInRun)
         local bPack, bSummary, bDist, bFlatDist, bIsBoss, bCharId = nil, nil, math.huge, math.huge, false, nil
         for packEntity, summary in pairs(summaries) do
             if typeof(summary.centroid) == "Vector3" then
-                local valid, isBoss, sampleChar = EvaluateHostilePack(world, Components, TeamUtils, localEntity, localTeam, summary, ignoreFilterFlag)
+                local valid, isBoss, sampleChar = F.EvaluateHostilePack(world, Components, TeamUtils, localEntity, localTeam, summary, ignoreFilterFlag)
                 if valid then
                     local delta = summary.centroid - myPos
                     local dist = delta.Magnitude
@@ -2313,7 +2321,7 @@ local function TryEngageNearestPack(forceTeleportInRun)
     return true, string.format("Pack #%s [%s] (%.0f studs%s)", tostring(serverEntity), tostring(bestCharId or "?"), bestDist, bestIsBoss and ", BOSS" or "")
 end
 
-local function FireAllEquippedAbilities()
+function F.FireAllEquippedAbilities()
     if Session.isRecoveringUnits then return 0 end
     local equipped = ReadStore("EquippedChampions", "table", true)
     if type(equipped) ~= "table" then return 0 end
@@ -2336,15 +2344,15 @@ local function FireAllEquippedAbilities()
     return count
 end
 
-local function ClaimDropById(dropId)
+function F.ClaimDropById(dropId)
     if not dropId or Session.claimedDrops[dropId] then return false end
     Session.claimedDrops[dropId] = os.clock()
     FireRemote("ClaimDrop", dropId)
     return true
 end
 
-local function ScanAndClaimEcsDrops()
-    local world, Components = GetEcsContext()
+function F.ScanAndClaimEcsDrops()
+    local world, Components = F.GetEcsContext()
     if not (world and Components and Components.DropInfo) then return 0 end
     local count = 0
     for _, dropInfo in world:query(Components.DropInfo) do
@@ -2352,7 +2360,7 @@ local function ScanAndClaimEcsDrops()
             if type(dropInfo.group) == "table" then
                 dropInfo.group.claimed = true
             end
-            if ClaimDropById(dropInfo.id) then
+            if F.ClaimDropById(dropInfo.id) then
                 count = count + 1
             end
         end
@@ -2360,7 +2368,7 @@ local function ScanAndClaimEcsDrops()
     return count
 end
 
-local function ConnectNetworkEventListeners()
+function F.ConnectNetworkEventListeners()
     local awardRemote = GetNetworkRemote("AwardDrops")
     if awardRemote and awardRemote:IsA("RemoteEvent") then
         TrackConnection(awardRemote.OnClientEvent:Connect(function(dropsPayload)
@@ -2371,10 +2379,10 @@ local function ConnectNetworkEventListeners()
                 task.wait(0.1)
                 for _, entry in ipairs(dropsPayload) do
                     if type(entry) == "table" and entry.id then
-                        ClaimDropById(entry.id)
+                        F.ClaimDropById(entry.id)
                     end
                 end
-                ScanAndClaimEcsDrops()
+                F.ScanAndClaimEcsDrops()
             end)
         end))
     end
@@ -2532,7 +2540,7 @@ local function ConnectNetworkEventListeners()
     end
 end
 
-local function HasUnopenedChestInWorkspace()
+function F.HasUnopenedChestInWorkspace()
     for _, chest in ipairs(CollectionService:GetTagged(C.ChestTag)) do
         if chest:IsDescendantOf(Workspace) then
             local chestId = chest:GetAttribute(C.ChestIdAttribute) or chest.Name
@@ -2547,7 +2555,7 @@ local function HasUnopenedChestInWorkspace()
     return false, nil, nil
 end
 
-local function ScanAndOpenChests(forceTeleportToChest)
+function F.ScanAndOpenChests(forceTeleportToChest)
     local count = 0
     for _, chest in ipairs(CollectionService:GetTagged(C.ChestTag)) do
         if chest:IsDescendantOf(Workspace) then
@@ -2569,7 +2577,7 @@ local function ScanAndOpenChests(forceTeleportToChest)
     return count
 end
 
-local function GetBoostRemainingSeconds(itemId)
+function F.GetBoostRemainingSeconds(itemId)
     local kind = C.BoosterKindMap[itemId] or itemId:gsub("_booster$", "")
     local boostSvc = GetGameModule("ClientBoostService", { "Client", "services", "ClientBoostService" })
     local fusion = GetGameModule("Fusion", { "Packages", "Fusion" })
@@ -2589,13 +2597,13 @@ local function GetBoostRemainingSeconds(itemId)
     return 0
 end
 
-local function TryUseTimedBooster(itemId)
+function F.TryUseTimedBooster(itemId)
     local target = itemId or Config.SelectedTimedBoost
     local owned = ReadStore("Items/" .. tostring(target), "number") or 0
     if owned < 1 then
         return false, "không có " .. tostring(target) .. " trong túi"
     end
-    local rem = GetBoostRemainingSeconds(target)
+    local rem = F.GetBoostRemainingSeconds(target)
     if rem > 3 then
         return false, string.format("đang còn hiệu lực (%ds)", rem)
     end
@@ -2609,7 +2617,7 @@ end
 -- ============================================================================
 -- [7] BOSS, STORY MISSION, QUESTGO, SMART RAID CARDS, DEFENSE & MATCH RESULTS
 -- ============================================================================
-local function RepairSingle(repairId)
+function F.RepairSingle(repairId)
     local pOk, ok, err = InvokeRemote("RepairObject", repairId)
     if pOk and ok == true then
         Session.knownRepaired[repairId] = true
@@ -2618,7 +2626,7 @@ local function RepairSingle(repairId)
     return false, tostring(err or ok or "chưa đủ điều kiện")
 end
 
-local function ChallengeSelectedBoss(worldId)
+function F.ChallengeSelectedBoss(worldId)
     local targetWorld = tostring(worldId or Config.SelectedBossWorld or "alien")
     if tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld") ~= "overworld" then
         return false, "đang ở trong màn chơi khác"
@@ -2627,7 +2635,7 @@ local function ChallengeSelectedBoss(worldId)
     local portalRepairId = targetWorld .. "_boss_portal"
     local repairedMap = ReadStore("Repaired", "table", true)
     if not ((type(repairedMap) == "table" and repairedMap[portalRepairId] == true) or Session.knownRepaired[portalRepairId] == true) then
-        RepairSingle(portalRepairId)
+        F.RepairSingle(portalRepairId)
     end
 
     -- 1. Thử gửi ChallengeBoss trực tiếp
@@ -2646,8 +2654,8 @@ local function ChallengeSelectedBoss(worldId)
             Session.lastSuccessfulTravelAt = os.clock()
             task.wait(0.18)
         else
-            if not IsAlreadyInOverworldArea(targetWorld) then
-                TravelToWorld(targetWorld, true)
+            if not F.IsAlreadyInOverworldArea(targetWorld) then
+                F.TravelToWorld(targetWorld, true)
                 task.wait(0.2)
             end
             for _, inst in ipairs(CollectionService:GetTagged("BossGate")) do
@@ -2658,7 +2666,7 @@ local function ChallengeSelectedBoss(worldId)
                 end
             end
         end
-        RepairSingle(portalRepairId)
+        F.RepairSingle(portalRepairId)
         pOk, ok, err = InvokeRemote("ChallengeBoss", targetWorld)
         if pOk and ok == true then
             return true, "Đã warp tới cổng & vào Boss " .. tostring(targetWorld)
@@ -2668,7 +2676,7 @@ local function ChallengeSelectedBoss(worldId)
     return false, tostring(err or ok or "chưa mở cổng Boss hoặc đang hồi")
 end
 
-local function RunActiveQuestGo()
+function F.RunActiveQuestGo()
     if tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld") ~= "overworld" then
         return false, "chỉ dùng QuestGo khi ở Overworld"
     end
@@ -2690,7 +2698,7 @@ end
 
 -- Chỉ gửi Lobby_SetChosenMission / Lobby_SetChosenChallenge khi phòng chờ chưa chọn đúng màn,
 -- tránh tự reset đếm ngược 5 giây (countdownEndsAt) của Lobby mỗi chu kỳ lặp!
-local function QueueLobbyGamemodeAndReady(gamemodeId, missionId, raidBaseId, raidTier)
+function F.QueueLobbyGamemodeAndReady(gamemodeId, missionId, raidBaseId, raidTier)
     if tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld") ~= "overworld" then
         return false, "đang ở trong màn chơi"
     end
@@ -2762,18 +2770,18 @@ local function QueueLobbyGamemodeAndReady(gamemodeId, missionId, raidBaseId, rai
     return true, string.format("Đã chọn & sẵn sàng Raid %s (Tier %d)", tostring(raidBaseId), tonumber(raidTier) or 1)
 end
 
-local function StartSelectedStoryMission(missionId)
+function F.StartSelectedStoryMission(missionId)
     local target = missionId or Config.SelectedMission
-    return QueueLobbyGamemodeAndReady("stage", target, nil, nil)
+    return F.QueueLobbyGamemodeAndReady("stage", target, nil, nil)
 end
 
-local function StartSelectedRaidChallenge(baseId, tier)
+function F.StartSelectedRaidChallenge(baseId, tier)
     local targetBase = baseId or Config.SelectedRaidBase
     local targetTier = tonumber(tier or Config.SelectedRaidTier) or 1
-    return QueueLobbyGamemodeAndReady("raid", nil, targetBase, targetTier)
+    return F.QueueLobbyGamemodeAndReady("raid", nil, targetBase, targetTier)
 end
 
-local function VoteMatchResults(option, forceSend)
+function F.VoteMatchResults(option, forceSend)
     local gamemode = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld")
     if gamemode == "overworld" then
         return false, "đang ở Overworld"
@@ -2828,10 +2836,10 @@ local function VoteMatchResults(option, forceSend)
 
     -- Nếu đang có rương chiến thắng chưa mở thì ưu tiên mở rương trước khi vote rời trận / chơi lại
     if Config.WaitChestBeforeVote and not forceSend then
-        local hasChest = HasUnopenedChestInWorkspace()
+        local hasChest = F.HasUnopenedChestInWorkspace()
         if hasChest or (type(snap) == "table" and snap.chestWaiting == true) then
-            ScanAndOpenChests(true)
-            if HasUnopenedChestInWorkspace() then
+            F.ScanAndOpenChests(true)
+            if F.HasUnopenedChestInWorkspace() then
                 return false, "đang mở rương chiến thắng trước khi vote"
             end
         end
@@ -2864,7 +2872,7 @@ local function VoteMatchResults(option, forceSend)
     return FireRemote("MatchResults_SetVote", choice)
 end
 
-local function LeaveCurrentRun()
+function F.LeaveCurrentRun()
     if tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld") == "overworld" then
         return false, "đang ở Overworld"
     end
@@ -2884,7 +2892,7 @@ local function LeaveCurrentRun()
     return true, "Đã gửi MatchResults_LeaveRun"
 end
 
-local function HandleRaidIntermission(forceVoteAndReady)
+function F.HandleRaidIntermission(forceVoteAndReady)
     local gs = ReplicatedStorage:FindFirstChild("GamemodeState")
     local rawJson = gs and gs:GetAttribute("RaidIntermission")
     if type(rawJson) == "string" and #rawJson > 2 then
@@ -2923,12 +2931,12 @@ end
 -- ============================================================================
 -- [7b] QUẢN LÝ TỔ ĐỘI / PARTY TỪ XA (Lobby_InvitePlayer, Lobby_Kick, Lobby_Promote, Lobby_CancelInvite)
 -- ============================================================================
-local PartyCreateModes = {
+F.PartyCreateModes = {
     "Tạo Phòng Theo Raid Đang Chọn",
     "Tạo Phòng Theo Story Mission Đang Chọn"
 }
 
-local function GetCurrentLobbyState()
+function F.GetCurrentLobbyState()
     local lobbySvc = GetGameModule("ClientLobbyService", { "Client", "services", "ClientLobbyService" })
     local fusion = GetGameModule("Fusion", { "Packages", "Fusion" })
     if type(lobbySvc) == "table" and lobbySvc.CurrentLobby and type(fusion) == "table" and typeof(fusion.peek) == "function" then
@@ -2944,15 +2952,15 @@ local function GetCurrentLobbyState()
     return Session.currentLobby
 end
 
-local function FormatPlayerOption(plr)
+function F.FormatPlayerOption(plr)
     return string.format("%s (@%s) [%d]", tostring(plr.DisplayName or plr.Name), tostring(plr.Name), tonumber(plr.UserId) or 0)
 end
 
-local function GetServerOtherPlayerOptions()
+function F.GetServerOtherPlayerOptions()
     local list = {}
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer then
-            list[#list + 1] = FormatPlayerOption(plr)
+            list[#list + 1] = F.FormatPlayerOption(plr)
         end
     end
     table.sort(list)
@@ -2962,7 +2970,7 @@ local function GetServerOtherPlayerOptions()
     return list
 end
 
-local function ResolveSelectedPartyUserId(rawSelection)
+function F.ResolveSelectedPartyUserId(rawSelection)
     local sel = tostring(rawSelection or Config.SelectedPartyPlayer or "")
     local uidStr = sel:match("%[(%d+)%]$") or sel:match("^(%d+)$")
     if uidStr then
@@ -2971,7 +2979,7 @@ local function ResolveSelectedPartyUserId(rawSelection)
     local lowerSel = string.lower(sel)
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer then
-            if string.lower(plr.Name) == lowerSel or string.lower(plr.DisplayName) == lowerSel or FormatPlayerOption(plr) == sel then
+            if string.lower(plr.Name) == lowerSel or string.lower(plr.DisplayName) == lowerSel or F.FormatPlayerOption(plr) == sel then
                 return plr.UserId
             end
         end
@@ -2979,8 +2987,8 @@ local function ResolveSelectedPartyUserId(rawSelection)
     return nil
 end
 
-local function EnsurePartyLobbyExists()
-    local lobby = GetCurrentLobbyState()
+function F.EnsurePartyLobbyExists()
+    local lobby = F.GetCurrentLobbyState()
     if type(lobby) == "table" then
         return true
     end
@@ -2993,8 +3001,8 @@ local function EnsurePartyLobbyExists()
     return true
 end
 
-local function InviteUserToParty(targetUserId)
-    local uid = tonumber(targetUserId) or ResolveSelectedPartyUserId(targetUserId)
+function F.InviteUserToParty(targetUserId)
+    local uid = tonumber(targetUserId) or F.ResolveSelectedPartyUserId(targetUserId)
     if not uid or uid == LocalPlayer.UserId then
         return false, "chưa chọn người chơi hợp lệ trong server"
     end
@@ -3002,13 +3010,13 @@ local function InviteUserToParty(targetUserId)
     if not targetPlr then
         return false, "người chơi không còn trong server"
     end
-    EnsurePartyLobbyExists()
+    F.EnsurePartyLobbyExists()
     FireRemote("Lobby_InvitePlayer", uid)
     return true, string.format("Đã gửi lời mời Tổ Đội tới %s (@%s)", tostring(targetPlr.DisplayName), tostring(targetPlr.Name))
 end
 
-local function CancelPartyInviteForUser(targetUserId)
-    local uid = tonumber(targetUserId) or ResolveSelectedPartyUserId(targetUserId)
+function F.CancelPartyInviteForUser(targetUserId)
+    local uid = tonumber(targetUserId) or F.ResolveSelectedPartyUserId(targetUserId)
     if not uid then
         return false, "chưa chọn người chơi hợp lệ"
     end
@@ -3021,12 +3029,12 @@ local function CancelPartyInviteForUser(targetUserId)
     return true, "Đã hủy lời mời Tổ Đội tới UserId " .. tostring(uid)
 end
 
-local function PromotePartyMember(targetUserId)
-    local uid = tonumber(targetUserId) or ResolveSelectedPartyUserId(targetUserId)
+function F.PromotePartyMember(targetUserId)
+    local uid = tonumber(targetUserId) or F.ResolveSelectedPartyUserId(targetUserId)
     if not uid then
         return false, "chưa chọn thành viên hợp lệ để nhường chủ phòng"
     end
-    local lobby = GetCurrentLobbyState()
+    local lobby = F.GetCurrentLobbyState()
     if type(lobby) == "table" and lobby.leaderUserId and lobby.leaderUserId ~= LocalPlayer.UserId then
         return false, "bạn không phải là chủ phòng hiện tại"
     end
@@ -3040,12 +3048,12 @@ local function PromotePartyMember(targetUserId)
     return true, "Đã nhường chủ phòng cho " .. tostring((targetPlr and targetPlr.DisplayName) or uid)
 end
 
-local function KickPartyMember(targetUserId)
-    local uid = tonumber(targetUserId) or ResolveSelectedPartyUserId(targetUserId)
+function F.KickPartyMember(targetUserId)
+    local uid = tonumber(targetUserId) or F.ResolveSelectedPartyUserId(targetUserId)
     if not uid then
         return false, "chưa chọn thành viên hợp lệ để đuổi khỏi phòng"
     end
-    local lobby = GetCurrentLobbyState()
+    local lobby = F.GetCurrentLobbyState()
     if type(lobby) == "table" and lobby.leaderUserId and lobby.leaderUserId ~= LocalPlayer.UserId then
         return false, "bạn không phải là chủ phòng hiện tại"
     end
@@ -3059,11 +3067,11 @@ local function KickPartyMember(targetUserId)
     return true, "Đã đuổi khỏi Tổ Đội: " .. tostring((targetPlr and targetPlr.DisplayName) or uid)
 end
 
-local function InviteMultiplePlayersToParty(friendsOnly)
-    EnsurePartyLobbyExists()
+function F.InviteMultiplePlayersToParty(friendsOnly)
+    F.EnsurePartyLobbyExists()
     local pOkElig, eligMap = InvokeRemote("Lobby_GetInviteEligibility")
     local eligibility = (pOkElig and type(eligMap) == "table") and eligMap or nil
-    local lobby = GetCurrentLobbyState()
+    local lobby = F.GetCurrentLobbyState()
     local inLobbySet = {}
     if type(lobby) == "table" and type(lobby.memberUserIds) == "table" then
         for _, mUid in ipairs(lobby.memberUserIds) do
@@ -3096,8 +3104,8 @@ local function InviteMultiplePlayersToParty(friendsOnly)
     return invitedCount
 end
 
-local function GetPartyStatusSummaryText()
-    local lobby = GetCurrentLobbyState()
+function F.GetPartyStatusSummaryText()
+    local lobby = F.GetCurrentLobbyState()
     if type(lobby) ~= "table" then
         return "Tổ Đội: Chưa vào phòng chờ (Lobby)"
     end
@@ -3120,7 +3128,7 @@ end
 -- ============================================================================
 -- [8] TRIỆU HỒI, SERVER AUTO-DISMANTLE, ĐỘI HÌNH, FEED, LOCK, DISMANTLE, ASCEND, EVOLVE, TRAIT & STAT
 -- ============================================================================
-local function PullBannerOnce()
+function F.PullBannerOnce()
     local booster = Config.SelectedBooster
     if booster == "Không dùng" or booster == "" then
         booster = nil
@@ -3133,7 +3141,7 @@ local function PullBannerOnce()
     return false, tostring(err or res or "không đủ tiền hoặc chưa mở banner")
 end
 
-local function ApplyServerSummonAutoDismantle()
+function F.ApplyServerSummonAutoDismantle()
     local settingsSvc = GetGameModule("ClientSettingsService", { "Client", "services", "ClientSettingsService" })
     local pairsToSet = {
         { "AutoDismantleRare", Config.ServerKeepRare },
@@ -3151,7 +3159,7 @@ local function ApplyServerSummonAutoDismantle()
         tostring(Config.ServerKeepRare), tostring(Config.ServerKeepEpic), tostring(Config.ServerKeepLegendary)), 4)
 end
 
-local function EquipBestChampions(forceSend)
+function F.EquipBestChampions(forceSend)
     local champions = ReadStore("Champions", "table", true)
     local equipped = ReadStore("EquippedChampions", "table", true) or {}
     local ranking = GetGameModule("ChampionRanking", { "Shared", "ChampionRanking" })
@@ -3206,18 +3214,18 @@ local function EquipBestChampions(forceSend)
 end
 
 -- Tự trang bị 1 chiến binh có nguyên tố yêu cầu (dùng cho nhiệm vụ NPC ở Land of Ninjas)
-local function EnsureElementChampionEquipped(requiredElement)
+function F.EnsureElementChampionEquipped(requiredElement)
     local champions = ReadStore("Champions", "table", true)
     local equipped = ReadStore("EquippedChampions", "table", true) or {}
     if type(champions) ~= "table" then return false end
     for _, uid in ipairs(equipped) do
         local ch = champions[uid]
-        if type(ch) == "table" and GetCharacterElement(ch.id) == requiredElement then
+        if type(ch) == "table" and F.GetCharacterElement(ch.id) == requiredElement then
             return true
         end
     end
     for uid, ch in pairs(champions) do
-        if type(ch) == "table" and GetCharacterElement(ch.id) == requiredElement then
+        if type(ch) == "table" and F.GetCharacterElement(ch.id) == requiredElement then
             local newTeam = table.clone(equipped)
             if #newTeam == 0 then
                 newTeam[1] = uid
@@ -3231,7 +3239,7 @@ local function EnsureElementChampionEquipped(requiredElement)
     return false
 end
 
-local function AutoFeedEquippedChampions()
+function F.AutoFeedEquippedChampions()
     local champions = ReadStore("Champions", "table", true)
     local equipped = ReadStore("EquippedChampions", "table", true) or {}
     local items = ReadStore("Items", "table") or {}
@@ -3298,7 +3306,7 @@ local function AutoFeedEquippedChampions()
     return 0, "không có trái cây phù hợp hoặc đã đạt giới hạn cấp"
 end
 
-local function GetChampionRarity(characterId)
+function F.GetChampionRarity(characterId)
     if type(characterId) ~= "string" or characterId == "" then return nil end
     local cached = Session.championRarityCache[characterId]
     if cached ~= nil then
@@ -3316,14 +3324,14 @@ local function GetChampionRarity(characterId)
     return nil
 end
 
-local function AutoLockRareChampions()
+function F.AutoLockRareChampions()
     local champions = ReadStore("Champions", "table", true)
     if type(champions) ~= "table" then return 0 end
     local lockPayload = {}
     local count = 0
     for uid, champ in pairs(champions) do
         if type(champ) == "table" and champ.locked ~= true then
-            local rarity = GetChampionRarity(champ.id)
+            local rarity = F.GetChampionRarity(champ.id)
             local rank = C.RarityRanks[rarity or ""] or 0
             if champ.shiny == true or rank >= C.RarityRanks.Mythic then
                 lockPayload[uid] = true
@@ -3340,7 +3348,7 @@ local function AutoLockRareChampions()
     return 0
 end
 
-local function AutoDismantleLowRarityChampions()
+function F.AutoDismantleLowRarityChampions()
     local champions = ReadStore("Champions", "table", true)
     local equipped = ReadStore("EquippedChampions", "table", true) or {}
     if type(champions) ~= "table" then return 0, "chưa đọc được kho Champions" end
@@ -3372,7 +3380,7 @@ local function AutoDismantleLowRarityChampions()
                 end
             end
             if not skip then
-                local rarity = GetChampionRarity(champ.id)
+                local rarity = F.GetChampionRarity(champ.id)
                 local rank = C.RarityRanks[rarity or ""]
                 if rank and rank <= maxRank then
                     toDismantle[#toDismantle + 1] = uid
@@ -3392,7 +3400,7 @@ local function AutoDismantleLowRarityChampions()
     return 0, tostring((type(res) == "table" and res.reason) or "phân rã bị từ chối")
 end
 
-local function AutoAscendAllPossible()
+function F.AutoAscendAllPossible()
     local champions = ReadStore("Champions", "table")
     local equipped = ReadStore("EquippedChampions", "table", true) or {}
     local rules = GetGameModule("ChampionRules", { "Shared", "ChampionRules" })
@@ -3442,7 +3450,7 @@ local function AutoAscendAllPossible()
     return fusedCount
 end
 
-local function AutoEvolveEquipped()
+function F.AutoEvolveEquipped()
     local champions = ReadStore("Champions", "table")
     local equipped = ReadStore("EquippedChampions", "table") or {}
     local items = ReadStore("Items", "table") or {}
@@ -3506,7 +3514,7 @@ local function AutoEvolveEquipped()
     return evolved, evolved > 0 and string.format("Đã tiến hóa %d chiến binh!", evolved) or "chưa có chiến binh nào đủ nguyên liệu tiến hóa"
 end
 
-local function DoesTraitMatchTarget(traitId)
+function F.DoesTraitMatchTarget(traitId)
     if type(traitId) ~= "string" or traitId == "" then
         return false
     end
@@ -3523,7 +3531,7 @@ local function DoesTraitMatchTarget(traitId)
     return false
 end
 
-local function GetTargetChampionUid()
+function F.GetTargetChampionUid()
     local trs = GetGameModule("ClientTraitRerollService", { "Client", "services", "ClientTraitRerollService" })
     local fusion = GetGameModule("Fusion", { "Packages", "Fusion" })
     if type(trs) == "table" and trs.ChampionUid and type(fusion) == "table" and typeof(fusion.peek) == "function" then
@@ -3539,9 +3547,9 @@ local function GetTargetChampionUid()
     return nil
 end
 
-local function StepTraitReroll()
+function F.StepTraitReroll()
     if Session.rerollingTrait then return end
-    local uid = GetTargetChampionUid()
+    local uid = F.GetTargetChampionUid()
     if not uid then
         Config.AutoTraitReroll = false
         Notify("Trait Reroll", "Không tìm thấy chiến binh để Reroll (hãy trang bị hoặc chọn trong máy Trait).", 4)
@@ -3554,7 +3562,7 @@ local function StepTraitReroll()
 
     local slotKey = tostring(Config.SelectedTraitSlot or "1")
     local currentTrait = type(champ.traits) == "table" and champ.traits[slotKey] or nil
-    if currentTrait and DoesTraitMatchTarget(currentTrait) then
+    if currentTrait and F.DoesTraitMatchTarget(currentTrait) then
         Config.AutoTraitReroll = false
         TriggerSave()
         Notify("Trait Reroll", string.format("Đã đạt Trait mục tiêu: %s (%s)!", tostring(currentTrait), tostring(C.TraitRarityMap[currentTrait] or "?")), 6)
@@ -3574,7 +3582,7 @@ local function StepTraitReroll()
     Session.rerollingTrait = false
 
     if pOk and type(res) == "table" and res.traitId then
-        if DoesTraitMatchTarget(res.traitId) then
+        if F.DoesTraitMatchTarget(res.traitId) then
             Config.AutoTraitReroll = false
             TriggerSave()
             Notify("Trait Reroll", string.format("Đã quay trúng Trait: %s (%s)!", tostring(res.traitId), tostring(C.TraitRarityMap[res.traitId] or "?")), 6)
@@ -3586,9 +3594,9 @@ local function StepTraitReroll()
     end
 end
 
-local function StepStatReroll()
+function F.StepStatReroll()
     if Session.rerollingStats then return end
-    local uid = GetTargetChampionUid()
+    local uid = F.GetTargetChampionUid()
     if not uid then
         Config.AutoStatReroll = false
         Notify("Stat Reroll", "Không tìm thấy chiến binh để quay chỉ số.", 4)
@@ -3648,7 +3656,7 @@ local function StepStatReroll()
     end
 end
 
-local function AutoRepairAllUnrepaired()
+function F.AutoRepairAllUnrepaired()
     local repairedMap = ReadStore("Repaired", "table") or {}
     local clearedBosses = ReadStore("ClearedBosses", "table") or {}
     local items = ReadStore("Items", "table") or {}
@@ -3661,7 +3669,7 @@ local function AutoRepairAllUnrepaired()
             canPlan = okP and type(plan) == "table"
         end
         if not repairedMap[rid] and canPlan then
-            local ok = RepairSingle(rid)
+            local ok = F.RepairSingle(rid)
             if ok then
                 count = count + 1
                 repairedMap[rid] = true
@@ -3675,7 +3683,7 @@ end
 -- ============================================================================
 -- [9] ENGINE AUTO QUEST NPC THEO TỪNG WORLD (QUESTLOGIC), VẬT PHẨM NHIỆM VỤ & TÂN THỦ
 -- ============================================================================
-local function BuildQuestContext()
+function F.BuildQuestContext()
     local questLogic = GetGameModule("QuestLogic", { "Shared", "QuestLogic" })
     local rawData = {
         QuestProgress = ReadStore("QuestProgress", "table") or {},
@@ -3712,7 +3720,7 @@ local function BuildQuestContext()
 end
 
 -- Dịch chuyển tới vật phẩm nhiệm vụ (QuestItem) chưa nhặt trong Workspace và gọi FindQuestItem
-local function TeleportAndCollectQuestItemsForQuest(questId, spotList, questCtx, questLogic)
+function F.TeleportAndCollectQuestItemsForQuest(questId, spotList, questCtx, questLogic)
     local pOkDirect, okDirect = InvokeRemote("FindQuestItem", questId)
     if pOkDirect and okDirect == true then
         return true
@@ -3763,7 +3771,7 @@ local WorldBossEnemyToWorldMap = {
     curse_king = "city"
 }
 
-local function ResolveWorldOfBossEnemy(enemyId)
+function F.ResolveWorldOfBossEnemy(enemyId)
     if type(enemyId) ~= "string" or enemyId == "" then return nil end
     local bossesCfg = GetGameModule("Bosses", { "Config", "Bosses" })
     if type(bossesCfg) == "table" and typeof(bossesCfg.worldOfBoss) == "function" then
@@ -3776,11 +3784,11 @@ local function ResolveWorldOfBossEnemy(enemyId)
 end
 
 -- Tự động điều quân, dịch chuyển tới quái, tung kỹ năng, mở rương, chọn thẻ Raid & thoát về Sảnh khi đang ở trong Raid / Story Mission / World Boss của Nhiệm Vụ NPC
-local function StepQuestActiveRunCombat(gamemode, questDoneInRun)
-    ScanAndClaimEcsDrops()
-    ScanAndOpenChests(true)
+function F.StepQuestActiveRunCombat(gamemode, questDoneInRun)
+    F.ScanAndClaimEcsDrops()
+    F.ScanAndOpenChests(true)
 
-    local pausedForHeal, healReason = CheckTeamRecoveryPause()
+    local pausedForHeal, healReason = F.CheckTeamRecoveryPause()
     if pausedForHeal then
         Session.questStatusText = string.format("[%s - HỒI PHỤC] %s", string.upper(tostring(gamemode)), tostring(healReason))
         return true
@@ -3788,7 +3796,7 @@ local function StepQuestActiveRunCombat(gamemode, questDoneInRun)
 
     FireRemote("PlayerArrival_Presented")
     if gamemode == "raid" then
-        if HandleRaidIntermission(true) then
+        if F.HandleRaidIntermission(true) then
             Session.questStatusText = "[QUEST -> RAID] Đang chọn thẻ Buff & qua màn kế tiếp..."
             return true
         end
@@ -3804,10 +3812,10 @@ local function StepQuestActiveRunCombat(gamemode, questDoneInRun)
 
     -- Khi đã xong mục tiêu nhiệm vụ trong màn chơi (hoặc xong trận), ưu tiên mở rương rồi vote về "lobby" để trả nhiệm vụ NPC
     local desiredVote = questDoneInRun and "lobby" or "retry"
-    VoteMatchResults(desiredVote, false)
+    F.VoteMatchResults(desiredVote, false)
 
-    local engaged, msg = TryEngageNearestPack(true)
-    FireAllEquippedAbilities()
+    local engaged, msg = F.TryEngageNearestPack(true)
+    F.FireAllEquippedAbilities()
     if engaged then
         Session.questStatusText = string.format("[QUEST -> %s] Đang Tele & Đánh: %s", string.upper(tostring(gamemode)), tostring(msg))
     end
@@ -3815,8 +3823,8 @@ local function StepQuestActiveRunCombat(gamemode, questDoneInRun)
 end
 
 -- Bộ điều phối Auto Quest của các NPC theo từng World (nhận -> di chuyển -> làm mục tiêu chưa xong -> trả quest)
-local function StepWorldNpcQuestEngine(allowEnteringRuns)
-    local pausedForHeal, healReason = CheckTeamRecoveryPause()
+function F.StepWorldNpcQuestEngine(allowEnteringRuns)
+    local pausedForHeal, healReason = F.CheckTeamRecoveryPause()
     if pausedForHeal then
         Session.questStatusText = "[TẠM DỪNG HỒI PHỤC] " .. tostring(healReason)
         return true
@@ -3831,7 +3839,7 @@ local function StepWorldNpcQuestEngine(allowEnteringRuns)
         return false
     end
 
-    local questCtx, questLogic = BuildQuestContext()
+    local questCtx, questLogic = F.BuildQuestContext()
     local metGivers = questCtx.metGivers or {}
     for _, npcId in ipairs(C.Npcs) do
         if metGivers[npcId] == true then
@@ -3991,7 +3999,7 @@ local function StepWorldNpcQuestEngine(allowEnteringRuns)
         Session.questCombatActive = false
         Session.activeQuestDoneInRun = true
         if not isOverworld then
-            StepQuestActiveRunCombat(gamemode, true)
+            F.StepQuestActiveRunCombat(gamemode, true)
             return true
         end
         Session.questStatusText = string.format("World [%s]: Đã hoàn tất mọi nhiệm vụ đã mở khóa!", tostring(Config.QuestWorldFilter))
@@ -4013,14 +4021,14 @@ local function StepWorldNpcQuestEngine(allowEnteringRuns)
     -- Nếu đang ở trong Raid / Story Mission / World Boss / Defense: tự động Tele tới quái, điều quân đánh, dùng kỹ năng, mở rương & vote kết quả
     if not isOverworld then
         Session.questCombatActive = true
-        StepQuestActiveRunCombat(gamemode, false)
+        F.StepQuestActiveRunCombat(gamemode, false)
         return true
     end
 
     if Config.AutoTravelForNpcQuest and type(activeWorldId) == "string" and activeWorldId ~= "" then
-        if not IsAlreadyInOverworldArea(activeWorldId) and os.clock() - Session.lastQuestTravelAt > 6 then
+        if not F.IsAlreadyInOverworldArea(activeWorldId) and os.clock() - Session.lastQuestTravelAt > 6 then
             Session.lastQuestTravelAt = os.clock()
-            TravelToWorld(activeWorldId, true)
+            F.TravelToWorld(activeWorldId, true)
             return true
         end
     end
@@ -4036,7 +4044,7 @@ local function StepWorldNpcQuestEngine(allowEnteringRuns)
             end
             if holds then
                 Session.questCombatActive = true
-                StartSelectedStoryMission(heldMissionId)
+                F.StartSelectedStoryMission(heldMissionId)
                 return true
             end
         end
@@ -4049,11 +4057,11 @@ local function StepWorldNpcQuestEngine(allowEnteringRuns)
             if o.kind == "meet" and type(o.npcId) == "string" then
                 FireRemote("MeetNpc", o.npcId)
             elseif o.kind == "find" then
-                TeleportAndCollectQuestItemsForQuest(activeQuestId, o.spots, questCtx, questLogic)
+                F.TeleportAndCollectQuestItemsForQuest(activeQuestId, o.spots, questCtx, questLogic)
             elseif o.kind == "repair" and type(o.repairId) == "string" then
-                RepairSingle(o.repairId)
+                F.RepairSingle(o.repairId)
             elseif o.kind == "equip" and type(o.element) == "string" then
-                EnsureElementChampionEquipped(o.element)
+                F.EnsureElementChampionEquipped(o.element)
             elseif o.kind == "flag" and type(o.flag) == "string" then
                 needsWorldCombat = true
                 local flagMob = FlagToEnemyMap[o.flag]
@@ -4068,21 +4076,21 @@ local function StepWorldNpcQuestEngine(allowEnteringRuns)
                 end
             elseif o.kind == "kill" or o.kind == "event" then
                 if o.kind == "event" and (o.event == "champion_fed" or o.event == "champion_level") then
-                    AutoFeedEquippedChampions()
+                    F.AutoFeedEquippedChampions()
                     needsWorldCombat = true
                 elseif o.kind == "event" and o.event == "summon" then
                     InvokeRemote("UnlockBanner", Config.SelectedBanner)
-                    PullBannerOnce()
+                    F.PullBannerOnce()
                 elseif o.kind == "event" and (o.event == "weekly_challenge_win" or o.event == "raid_win" or o.event == "raid_complete") and allowEnteringRuns and Config.AutoRunQuestMissionsAndBoss then
                     Session.questCombatActive = true
-                    StartSelectedRaidChallenge(Config.SelectedRaidBase, Config.SelectedRaidTier)
+                    F.StartSelectedRaidChallenge(Config.SelectedRaidBase, Config.SelectedRaidTier)
                     return true
                 else
-                    local targetBossWorld = (o.kind == "kill" and type(o.enemyId) == "string") and ResolveWorldOfBossEnemy(o.enemyId) or nil
+                    local targetBossWorld = (o.kind == "kill" and type(o.enemyId) == "string") and F.ResolveWorldOfBossEnemy(o.enemyId) or nil
                     if targetBossWorld and allowEnteringRuns and Config.AutoRunQuestMissionsAndBoss then
                         Session.questCombatActive = true
-                        RepairSingle(targetBossWorld .. "_boss_portal")
-                        ChallengeSelectedBoss(targetBossWorld)
+                        F.RepairSingle(targetBossWorld .. "_boss_portal")
+                        F.ChallengeSelectedBoss(targetBossWorld)
                         return true
                     end
                     needsWorldCombat = true
@@ -4097,14 +4105,14 @@ local function StepWorldNpcQuestEngine(allowEnteringRuns)
             elseif o.kind == "mission" and type(o.missionId) == "string" then
                 if allowEnteringRuns and Config.AutoRunQuestMissionsAndBoss then
                     Session.questCombatActive = true
-                    StartSelectedStoryMission(o.missionId)
+                    F.StartSelectedStoryMission(o.missionId)
                     return true
                 end
             elseif o.kind == "boss" and type(o.worldId) == "string" then
                 if allowEnteringRuns and Config.AutoRunQuestMissionsAndBoss then
                     Session.questCombatActive = true
-                    RepairSingle(o.worldId .. "_boss_portal")
-                    ChallengeSelectedBoss(o.worldId)
+                    F.RepairSingle(o.worldId .. "_boss_portal")
+                    F.ChallengeSelectedBoss(o.worldId)
                     return true
                 end
             end
@@ -4113,15 +4121,15 @@ local function StepWorldNpcQuestEngine(allowEnteringRuns)
 
     Session.questCombatActive = needsWorldCombat
     -- Tự động Tele tới bãi quái nhiệm vụ trong World và điều quân đánh + tung kỹ năng
-    local engaged = TryEngageNearestPack(true)
+    local engaged = F.TryEngageNearestPack(true)
     if engaged then
-        FireAllEquippedAbilities()
+        F.FireAllEquippedAbilities()
     end
     return true
 end
 
 -- Auto Hoàn Thành Tân Thủ Cho Tài Khoản Mới (stage -> summon -> fight -> done)
-local function StepAutoTutorial()
+function F.StepAutoTutorial()
     local tutorialMod = GetGameModule("Tutorial", { "Shared", "Tutorial" })
     local tutStep = ReadStore("TutorialStep", "string")
     local normStep = "done"
@@ -4159,10 +4167,10 @@ local function StepAutoTutorial()
         else
             FireRemote("PlayerArrival_Presented")
             FireRemote("StageScene_Continue")
-            ScanAndOpenChests(true)
-            TryEngageNearestPack(true)
-            FireAllEquippedAbilities()
-            VoteMatchResults("lobby", false)
+            F.ScanAndOpenChests(true)
+            F.TryEngageNearestPack(true)
+            F.FireAllEquippedAbilities()
+            F.VoteMatchResults("lobby", false)
             return true
         end
     elseif normStep == "summon" then
@@ -4172,20 +4180,20 @@ local function StepAutoTutorial()
             return true
         end
     elseif normStep == "fight" then
-        StepWorldNpcQuestEngine(true)
+        F.StepWorldNpcQuestEngine(true)
         return true
     end
     return false
 end
 
-local function ScanAndHandleQuests()
-    local pausedForHeal, healReason = CheckTeamRecoveryPause()
+function F.ScanAndHandleQuests()
+    local pausedForHeal, healReason = F.CheckTeamRecoveryPause()
     if pausedForHeal then
         Session.questStatusText = "[TẠM DỪNG HỒI PHỤC] " .. tostring(healReason)
         return
     end
     if Config.AutoWorldNpcQuestLoop then
-        StepWorldNpcQuestEngine(true)
+        F.StepWorldNpcQuestEngine(true)
         return
     end
 
@@ -4197,7 +4205,7 @@ local function ScanAndHandleQuests()
     end
 
     local questsCfg = GetGameModule("Quests", { "Config", "Quests" })
-    local questCtx, questLogic = BuildQuestContext()
+    local questCtx, questLogic = F.BuildQuestContext()
     local progress = questCtx.questProgress or {}
 
     if Config.AutoAcceptQuests and type(questsCfg) == "table" and typeof(questsCfg.getAllLines) == "function" then
@@ -4232,7 +4240,7 @@ local function ScanAndHandleQuests()
     for questId in pairs(progress) do
         if type(questId) == "string" then
             if Config.AutoFindQuestItems then
-                TeleportAndCollectQuestItemsForQuest(questId, nil, questCtx, questLogic)
+                F.TeleportAndCollectQuestItemsForQuest(questId, nil, questCtx, questLogic)
             end
             if Config.AutoClaimQuests then
                 local canClaim = true
@@ -4260,14 +4268,14 @@ end
 -- ============================================================================
 -- [9b] AUTO FARM BOSS / RAID / CHẾ ĐỘ THÔNG MINH (TỰ NHẬN DIỆN MỌI CHẾ ĐỘ)
 -- ============================================================================
-local function StepUniversalModeFarm()
+function F.StepUniversalModeFarm()
     local gamemode = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld")
 
     -- Mọi chế độ: nhặt drop, mở rương (tự dịch chuyển tới rương khi ở trong màn chơi)
-    ScanAndClaimEcsDrops()
-    ScanAndOpenChests(gamemode ~= "overworld")
+    F.ScanAndClaimEcsDrops()
+    F.ScanAndOpenChests(gamemode ~= "overworld")
 
-    local pausedForHeal, healReason = CheckTeamRecoveryPause()
+    local pausedForHeal, healReason = F.CheckTeamRecoveryPause()
     if pausedForHeal then
         Session.universalStatusText = "[TẠM DỪNG HỒI PHỤC] " .. tostring(healReason)
         return
@@ -4275,13 +4283,13 @@ local function StepUniversalModeFarm()
 
     if gamemode == "raid" then
         FireRemote("PlayerArrival_Presented")
-        if HandleRaidIntermission(true) then
+        if F.HandleRaidIntermission(true) then
             Session.universalStatusText = "[RAID] Đang chọn thẻ Buff & qua màn kế tiếp..."
             return
         end
-        VoteMatchResults(Config.MatchVoteOption, false)
-        local engaged, msg = TryEngageNearestPack(true)
-        FireAllEquippedAbilities()
+        F.VoteMatchResults(Config.MatchVoteOption, false)
+        local engaged, msg = F.TryEngageNearestPack(true)
+        F.FireAllEquippedAbilities()
         Session.universalStatusText = engaged and ("[RAID] Đang đánh: " .. tostring(msg)) or "[RAID] Đang chờ đợt quái / kết quả..."
         return
     end
@@ -4289,9 +4297,9 @@ local function StepUniversalModeFarm()
     if gamemode == "defense" then
         FireRemote("PlayerArrival_Presented")
         FireRemote("Defense_RequestNextWave")
-        VoteMatchResults(Config.MatchVoteOption, false)
-        local engaged, msg = TryEngageNearestPack(true)
-        FireAllEquippedAbilities()
+        F.VoteMatchResults(Config.MatchVoteOption, false)
+        local engaged, msg = F.TryEngageNearestPack(true)
+        F.FireAllEquippedAbilities()
         Session.universalStatusText = engaged and ("[DEFENSE] Đang bảo vệ trụ: " .. tostring(msg)) or "[DEFENSE] Đang gọi đợt quái kế tiếp..."
         return
     end
@@ -4303,9 +4311,9 @@ local function StepUniversalModeFarm()
             FireRemote("MissionTalk_Ended", Session.lastMissionTalkRunId)
             Session.lastMissionTalkRunId = nil
         end
-        VoteMatchResults(Config.MatchVoteOption, false)
-        local engaged, msg = TryEngageNearestPack(true)
-        FireAllEquippedAbilities()
+        F.VoteMatchResults(Config.MatchVoteOption, false)
+        local engaged, msg = F.TryEngageNearestPack(true)
+        F.FireAllEquippedAbilities()
         Session.universalStatusText = engaged and ("[STAGE/BOSS] Đang chiến đấu: " .. tostring(msg)) or "[STAGE/BOSS] Đang dọn màn & mở rương..."
         return
     end
@@ -4313,8 +4321,8 @@ local function StepUniversalModeFarm()
     -- Khi đang ở Overworld / Sảnh
     local targetMode = Config.UniversalOverworldTarget
     if targetMode == "Làm Nhiệm Vụ NPC Theo World Đã Chọn" then
-        StepWorldNpcQuestEngine(true)
-        FireAllEquippedAbilities()
+        F.StepWorldNpcQuestEngine(true)
+        F.FireAllEquippedAbilities()
         Session.universalStatusText = "[OVERWORLD -> QUEST] " .. tostring(Session.questStatusText)
         return
     end
@@ -4322,29 +4330,29 @@ local function StepUniversalModeFarm()
     if os.clock() - Session.lastUniversalQueueAt >= 2.0 then
         Session.lastUniversalQueueAt = os.clock()
         if targetMode == "Vào & Farm World Boss Đã Chọn" then
-            local okBoss, msg = ChallengeSelectedBoss(Config.SelectedBossWorld)
+            local okBoss, msg = F.ChallengeSelectedBoss(Config.SelectedBossWorld)
             Session.universalStatusText = "[OVERWORLD -> BOSS] " .. tostring(msg)
             if okBoss then
                 return
             end
         elseif targetMode == "Vào & Farm Raid Đã Chọn" then
-            local _, msg = StartSelectedRaidChallenge(Config.SelectedRaidBase, Config.SelectedRaidTier)
+            local _, msg = F.StartSelectedRaidChallenge(Config.SelectedRaidBase, Config.SelectedRaidTier)
             Session.universalStatusText = "[OVERWORLD -> RAID] " .. tostring(msg)
         elseif targetMode == "Vào & Farm Story Mission Đã Chọn" then
-            local _, msg = StartSelectedStoryMission(Config.SelectedMission)
+            local _, msg = F.StartSelectedStoryMission(Config.SelectedMission)
             Session.universalStatusText = "[OVERWORLD -> MISSION] " .. tostring(msg)
         end
     end
 
     -- Mặc định khi ở Overworld (hoặc trong lúc chờ đếm ngược Lobby): tự đánh nhóm quái gần nhất
-    local engaged, msg = TryEngageNearestPack(false)
+    local engaged, msg = F.TryEngageNearestPack(false)
     if engaged then
-        FireAllEquippedAbilities()
+        F.FireAllEquippedAbilities()
     end
     Session.universalStatusText = engaged and ("[OVERWORLD] Đang farm quái: " .. tostring(msg)) or "[OVERWORLD] Đang chờ quái hoặc đếm ngược vào màn..."
 end
 
-local function ClaimAllMilestonesSmart()
+function F.ClaimAllMilestonesSmart()
     local milestoneLogic = GetGameModule("MilestoneLogic", { "Shared", "MilestoneLogic" })
     if type(milestoneLogic) == "table" and typeof(milestoneLogic.countClaimable) == "function" then
         local mCtx = {
@@ -4361,11 +4369,11 @@ local function ClaimAllMilestonesSmart()
     return (pOk and ok) and 1 or 0
 end
 
-local function ClaimDailyBonusSmart()
+function F.ClaimDailyBonusSmart()
     if ReadStore("DailyBonusClaimed", "boolean") == true then
         return false
     end
-    local questCtx, questLogic = BuildQuestContext()
+    local questCtx, questLogic = F.BuildQuestContext()
     if type(questLogic) == "table" and typeof(questLogic.getDailyBonusProgress) == "function" then
         local okD, prog = SafeCallGame(questLogic.getDailyBonusProgress, questCtx)
         if okD and type(prog) == "table" and prog.state ~= "claimable" then
@@ -4376,7 +4384,7 @@ local function ClaimDailyBonusSmart()
     return pOk and ok == true
 end
 
-local function ClaimSeasonPassSmart()
+function F.ClaimSeasonPassSmart()
     local spData = ReadStore("SeasonPass", "table")
     local spLogic = GetGameModule("SeasonPassLogic", { "Shared", "SeasonPassLogic" })
     local spLiveSvc = GetGameModule("ClientSeasonLiveService", { "Client", "services", "ClientSeasonLiveService" })
@@ -4397,7 +4405,7 @@ local function ClaimSeasonPassSmart()
     return (pOk and ok) and 1 or 0
 end
 
-local function ClaimAllSeasonRepeatables()
+function F.ClaimAllSeasonRepeatables()
     local spData = ReadStore("SeasonPass", "table")
     if not (type(spData) == "table" and type(spData.repeatables) == "table") then return 0 end
     local spLogic = GetGameModule("SeasonPassLogic", { "Shared", "SeasonPassLogic" })
@@ -4428,7 +4436,7 @@ local function ClaimAllSeasonRepeatables()
     return claimed
 end
 
-local function ClaimFreeStoreAndGifts()
+function F.ClaimFreeStoreAndGifts()
     local claimed = 0
     local freeClaims = ReadStore("FreeClaims", "table")
     local purchasedPacks = ReadStore("PurchasedPacks", "table") or {}
@@ -4457,7 +4465,7 @@ local function ClaimFreeStoreAndGifts()
     return claimed
 end
 
-local function TryBuyPassWithVouchers(passKey)
+function F.TryBuyPassWithVouchers(passKey)
     local target = passKey or Config.SelectedVoucherPass
     local cost = C.VoucherPassCosts[target] or 0
     local vouchers = ReadStore("Items/voucher", "number") or 0
@@ -4474,7 +4482,7 @@ local function TryBuyPassWithVouchers(passKey)
     return false, tostring(err or ok or "bị từ chối")
 end
 
-local function GetCurrencyBalance(currencyId, itemsTbl)
+function F.GetCurrencyBalance(currencyId, itemsTbl)
     local cid = tostring(currencyId or "gold")
     if type(itemsTbl) == "table" and type(itemsTbl[cid]) == "number" then
         return itemsTbl[cid]
@@ -4501,7 +4509,7 @@ local PrevWorldByWorld = {
     ant = "city"
 }
 
-local function IsWorldUnlockedSmart(requiredWorld, clearedBosses, hasValidCleared, catalog, offer, overworldCfg)
+function F.IsWorldUnlockedSmart(requiredWorld, clearedBosses, hasValidCleared, catalog, offer, overworldCfg)
     if type(requiredWorld) ~= "string" or requiredWorld == "" or requiredWorld == "alien" then
         return true
     end
@@ -4516,7 +4524,7 @@ local function IsWorldUnlockedSmart(requiredWorld, clearedBosses, hasValidCleare
     end
     -- Nếu người chơi đang đứng ở một World >= requiredWorld hoặc đã mở khóa Banner của World đó thì chắc chắn đã mở khóa
     local reqRank = WorldProgressionRank[requiredWorld] or 99
-    local curArea = GetCurrentOverworldArea()
+    local curArea = F.GetCurrentOverworldArea()
     local curRank = WorldProgressionRank[curArea] or 0
     if curRank >= reqRank then
         return true
@@ -4544,7 +4552,7 @@ local function IsWorldUnlockedSmart(requiredWorld, clearedBosses, hasValidCleare
     return true
 end
 
-local function OpenMerchantWindowOnScreen(merchantId)
+function F.OpenMerchantWindowOnScreen(merchantId)
     local target = tostring(merchantId or Config.SelectedMerchant or "GoldMerchant")
     -- 1. Thử tìm trực tiếp thực thể ClientMerchantService hoặc ClientUIService đang sống trong GC của LocalScript game
     local gcFn = (typeof(getgc) == "function" and getgc) or nil
@@ -4594,9 +4602,9 @@ local function OpenMerchantWindowOnScreen(merchantId)
     return true
 end
 
-local function BuyAllMerchantOffers(merchantId, forceAttempt)
+function F.BuyAllMerchantOffers(merchantId, forceAttempt)
     local target = tostring(merchantId or Config.SelectedMerchant or "GoldMerchant")
-    local selectedSet, selectedCount = GetActiveSelectedMerchantItemsSet(target)
+    local selectedSet, selectedCount = F.GetActiveSelectedMerchantItemsSet(target)
     -- Chỉ áp dụng bộ lọc Multi khi người chơi có tích chọn ít nhất 1 món VÀ đang bật lọc (hoặc có chọn món trong hộp Multi).
     -- Nếu người chơi bật "Chỉ Mua Các Món Đồ Đã Chọn" nhưng hộp Multi đang để trống (0 món), tự động mua toàn bộ kệ thay vì đứng im!
     local useItemFilter = (selectedCount > 0) and (Config.FilterMerchantBySelectedItems ~= false)
@@ -4636,8 +4644,8 @@ local function BuyAllMerchantOffers(merchantId, forceAttempt)
     end
 
     local currencyId = C.MerchantCurrencyMap[target] or "gold"
-    local knownBalance = GetCurrencyBalance(currencyId, rawItems)
-    local knownGold = GetCurrencyBalance("gold", rawItems)
+    local knownBalance = F.GetCurrencyBalance(currencyId, rawItems)
+    local knownGold = F.GetCurrencyBalance("gold", rawItems)
     local hasValidBalance = (type(knownBalance) == "number")
     local hasValidGold = (type(knownGold) == "number")
     local hasValidCleared = (type(rawCleared) == "table" and next(rawCleared) ~= nil)
@@ -4707,7 +4715,7 @@ local function BuyAllMerchantOffers(merchantId, forceAttempt)
 
             if canTryUpgrade then
                 Session.upgradeTryCooldown[upgradeId] = os.clock()
-                local okRep, errRep = RepairSingle(upgradeId)
+                local okRep, errRep = F.RepairSingle(upgradeId)
                 if okRep then
                     bought = bought + 1
                     boughtNames[#boughtNames + 1] = upgradeId
@@ -4766,7 +4774,7 @@ local function BuyAllMerchantOffers(merchantId, forceAttempt)
 
     if merchantDef and type(merchantDef.currencyId) == "string" then
         currencyId = merchantDef.currencyId
-        knownBalance = GetCurrencyBalance(currencyId, items)
+        knownBalance = F.GetCurrencyBalance(currencyId, items)
         hasValidBalance = (type(knownBalance) == "number")
     end
 
@@ -4804,7 +4812,7 @@ local function BuyAllMerchantOffers(merchantId, forceAttempt)
             if itemAllowed then
                 local packSize = tonumber(offer.packSize) or 1
                 local unitPackPrice = tonumber(offer.price) or 1
-                local unlocked = IsWorldUnlockedSmart(offer.requiredWorld, clearedBosses, hasValidCleared, catalog, offer, overworldCfg)
+                local unlocked = F.IsWorldUnlockedSmart(offer.requiredWorld, clearedBosses, hasValidCleared, catalog, offer, overworldCfg)
 
                 local left = nil
                 if type(rawWeekly) == "table" and type(catalog) == "table" and typeof(catalog.weeklyLeft) == "function" and typeof(catalog.weeklyKey) == "function" then
@@ -4895,7 +4903,7 @@ local function BuyAllMerchantOffers(merchantId, forceAttempt)
     return bought, Session.merchantStatusText
 end
 
-local function RedeemCodeString(rawText)
+function F.RedeemCodeString(rawText)
     local codes = {}
     for word in tostring(rawText or ""):gmatch("[^,%s;]+") do
         local clean = word:gsub("^%s+", ""):gsub("%s+$", "")
@@ -4908,9 +4916,9 @@ local function RedeemCodeString(rawText)
         return
     end
     for _, code in ipairs(codes) do
-        local pOk, status, _, msg = InvokeRemote("RedeemCode", code)
+        local pOk, status, detail, msg = InvokeRemote("RedeemCode", code)
         if pOk then
-            Notify("Giftcode [" .. code .. "]", tostring(msg or status or "Đã gửi"), 4)
+            Notify("Giftcode [" .. code .. "]", tostring(msg or detail or status or "Đã gửi"), 4)
         else
             Notify("Giftcode [" .. code .. "]", "Lỗi gọi RedeemCode", 3)
         end
@@ -4918,7 +4926,7 @@ local function RedeemCodeString(rawText)
     end
 end
 
-local function FetchAndRedeemServerCodes()
+function F.FetchAndRedeemServerCodes()
     local pOk, payload = InvokeRemote("CodeListGet")
     local redeemedMap = ReadStore("RedeemedCodes", "table") or {}
     local foundCodes = {}
@@ -4936,9 +4944,9 @@ local function FetchAndRedeemServerCodes()
         return
     end
     for _, code in ipairs(foundCodes) do
-        local ok, status, _, msg = InvokeRemote("RedeemCode", code)
+        local ok, status, detail, msg = InvokeRemote("RedeemCode", code)
         if ok then
-            Notify("Giftcode [" .. code .. "]", tostring(msg or status or "Đã nhập"), 3)
+            Notify("Giftcode [" .. code .. "]", tostring(msg or detail or status or "Đã nhập"), 3)
         end
         task.wait(0.3)
     end
@@ -4947,7 +4955,7 @@ end
 -- ============================================================================
 -- [10] DỊCH CHUYỂN (HUBWARP), TỐC ĐỘ, TỐI ƯU FPS, MỞ CỬA SỔ UI & ESP
 -- ============================================================================
-local function HubWarpTo(destination)
+function F.HubWarpTo(destination)
     local warpSvc = GetGameModule("ClientHubWarpService", { "Client", "services", "ClientHubWarpService" })
     if type(warpSvc) == "table" and typeof(warpSvc.Warp) == "function" then
         local ok, res = SafeCallGame(warpSvc.Warp, destination)
@@ -4966,7 +4974,7 @@ local function HubWarpTo(destination)
     return false
 end
 
-local function OpenGameWindow(windowId)
+function F.OpenGameWindow(windowId)
     local target = windowId or Config.SelectedWindow
     local uiSvc = GetGameModule("ClientUIService", { "Client", "services", "ClientUIService" })
     if type(uiSvc) == "table" and typeof(uiSvc.Navigate) == "function" then
@@ -4982,7 +4990,7 @@ local function OpenGameWindow(windowId)
     return false
 end
 
-local function ApplyAutoSprint(enabled)
+function F.ApplyAutoSprint(enabled)
     FireRemote("SetSetting", "AutoSprint", enabled == true)
     local moveSvc = GetGameModule("ClientMovementService", { "Client", "services", "ClientMovementService" })
     if type(moveSvc) == "table" and typeof(moveSvc.SetAutoSprint) == "function" then
@@ -4991,7 +4999,7 @@ local function ApplyAutoSprint(enabled)
     EnsureHighIdentity()
 end
 
-local function ApplyLowLagMode(enabled)
+function F.ApplyLowLagMode(enabled)
     if enabled then
         pcall(function() ReplicatedStorage:SetAttribute("LowGraphics", true) end)
         EnsureHighIdentity()
@@ -5029,7 +5037,7 @@ local function ApplyLowLagMode(enabled)
     EnsureHighIdentity()
 end
 
-local function ClearTutorialTipsAndUnseen()
+function F.ClearTutorialTipsAndUnseen()
     local unseen = ReadStore("UnseenChampions", "table")
     if type(unseen) == "table" and next(unseen) ~= nil then
         FireRemote("ChampionsSeen")
@@ -5040,7 +5048,7 @@ local function ClearTutorialTipsAndUnseen()
     end
 end
 
-local function GetEspFolder()
+function F.GetEspFolder()
     EnsureHighIdentity()
     if Session.espFolder and Session.espFolder.Parent then
         return Session.espFolder
@@ -5057,7 +5065,7 @@ local function GetEspFolder()
     return folder
 end
 
-local function SyncEsp(kind, enabled, targetsFn, fill)
+function F.SyncEsp(kind, enabled, targetsFn, fill)
     local registry = Session.esp[kind]
     if not enabled and next(registry) == nil then
         return
@@ -5075,7 +5083,7 @@ local function SyncEsp(kind, enabled, targetsFn, fill)
                     hl.OutlineColor = Color3.new(1, 1, 1)
                     hl.FillTransparency = 0.5
                     hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-                    hl.Parent = GetEspFolder()
+                    hl.Parent = F.GetEspFolder()
                     registry[model] = hl
                 end
             end
@@ -5089,7 +5097,7 @@ local function SyncEsp(kind, enabled, targetsFn, fill)
     end
 end
 
-local EspKinds = {
+F.EspKinds = {
     {
         kind = "npc",
         cfg = "ESPNpc",
@@ -5128,9 +5136,8 @@ local EspKinds = {
 -- ============================================================================
 -- [11] ANTI-AFK CHỦ ĐỘNG (nhường chế độ AFK của game để giữ thưởng chơi lâu)
 -- ============================================================================
-local AntiAfk = { lastInput = Workspace:GetServerTimeNow(), lastNudge = nil, count = 0, detail = "", why = nil }
-local RunAntiAfk, AntiAfkStatusText
-do
+F.AntiAfk = { lastInput = Workspace:GetServerTimeNow(), lastNudge = nil, count = 0, detail = "", why = nil }
+(function()
     local AFK_YIELD_UNTIL = 1020
     local AFK_LAST_RESORT = 1140
 
@@ -5170,42 +5177,42 @@ do
             userOk and "OK" or "lỗi", vimOk and "OK" or "lỗi")
     end
 
-    RunAntiAfk = function(force)
+    F.RunAntiAfk = function(force)
         local now = Workspace:GetServerTimeNow()
         local playOn = Workspace:GetAttribute(C.PlayRewardsOnAttribute) == true
         local inAfkMode = type(LocalPlayer:GetAttribute(C.AfkSinceAttribute)) == "number"
-        local go, why = DecideAntiAfk(Config.AntiKick, Config.AntiAfkYield, Config.AntiAfkInterval, now - AntiAfk.lastInput, playOn, inAfkMode)
-        AntiAfk.why = why
+        local go, why = DecideAntiAfk(Config.AntiKick, Config.AntiAfkYield, Config.AntiAfkInterval, now - F.AntiAfk.lastInput, playOn, inAfkMode)
+        F.AntiAfk.why = why
         if not (go or force) then
             return
         end
         local ok, detail = SendFakeInput(Config.AntiAfkMove)
-        AntiAfk.lastInput, AntiAfk.lastNudge, AntiAfk.detail = now, now, detail
-        AntiAfk.why = nil
+        F.AntiAfk.lastInput, F.AntiAfk.lastNudge, F.AntiAfk.detail = now, now, detail
+        F.AntiAfk.why = nil
         if ok then
-            AntiAfk.count = AntiAfk.count + 1
+            F.AntiAfk.count = F.AntiAfk.count + 1
         end
         return ok, detail
     end
 
-    AntiAfkStatusText = function()
+    F.AntiAfkStatusText = function()
         if not Config.AntiKick then return "Anti-AFK: TẮT" end
         local now = Workspace:GetServerTimeNow()
-        local text = "Anti-AFK: BẬT | rảnh " .. FormatDuration(now - AntiAfk.lastInput)
-        if AntiAfk.lastNudge then
-            text = text .. " | bấm cuối " .. FormatDuration(now - AntiAfk.lastNudge) .. " trước (" .. AntiAfk.detail .. ")"
+        local text = "Anti-AFK: BẬT | rảnh " .. FormatDuration(now - F.AntiAfk.lastInput)
+        if F.AntiAfk.lastNudge then
+            text = text .. " | bấm cuối " .. FormatDuration(now - F.AntiAfk.lastNudge) .. " trước (" .. AntiAfk.detail .. ")"
         end
-        if AntiAfk.why and AntiAfk.why ~= "đang có thao tác" then
+        if F.AntiAfk.why and F.AntiAfk.why ~= "đang có thao tác" then
             text = text .. " | " .. AntiAfk.why
         end
         return text
     end
-end
+end)()
 
 -- ============================================================================
 -- [12] NHÃN TRẠNG THÁI & CẬP NHẬT GIAO DIỆN
 -- ============================================================================
-local function SetLabels(texts)
+function F.SetLabels(texts)
     EnsureHighIdentity()
     for key, text in pairs(texts) do
         if Session.lastLabelTexts[key] ~= text then
@@ -5218,7 +5225,7 @@ local function SetLabels(texts)
     end
 end
 
-local function GetLiveDpsValue()
+function F.GetLiveDpsValue()
     local dpsSvc = GetGameModule("ClientDpsMeterService", { "Client", "services", "ClientDpsMeterService" })
     local fusion = GetGameModule("Fusion", { "Packages", "Fusion" })
     if type(dpsSvc) == "table" and dpsSvc.Dps and type(fusion) == "table" and typeof(fusion.peek) == "function" then
@@ -5230,11 +5237,11 @@ local function GetLiveDpsValue()
     return 0
 end
 
-local function UpdateStatus()
+function F.UpdateStatus()
     local gamemode = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld")
-    local area = GetCurrentOverworldArea()
+    local area = F.GetCurrentOverworldArea()
     if area == "" then area = "?" end
-    local liveDps = GetLiveDpsValue()
+    local liveDps = F.GetLiveDpsValue()
     local itemsTbl = ReadStore("Items", "table", true)
     local gold = (type(itemsTbl) == "table" and tonumber(itemsTbl.gold)) or ReadStore("Items/gold", "number") or 0
     local gems = (type(itemsTbl) == "table" and tonumber(itemsTbl.gems)) or ReadStore("Items/gems", "number") or 0
@@ -5251,7 +5258,7 @@ local function UpdateStatus()
     local totalChamps = 0
     for _ in pairs(champions) do totalChamps = totalChamps + 1 end
 
-    local targetUid = GetTargetChampionUid()
+    local targetUid = F.GetTargetChampionUid()
     local targetChamp = targetUid and champions[targetUid] or nil
     local slotKey = tostring(Config.SelectedTraitSlot or "1")
     local curTrait = targetChamp and type(targetChamp.traits) == "table" and targetChamp.traits[slotKey] or "Chưa có"
@@ -5267,16 +5274,16 @@ local function UpdateStatus()
         statSummary = table.concat(parts, " | ")
     end
 
-    local _, selectedMobCount = GetActiveSelectedMobsSet()
-    CheckTeamRecoveryPause()
+    local _, selectedMobCount = F.GetActiveSelectedMobsSet()
+    F.CheckTeamRecoveryPause()
 
-    SetLabels({
+    F.SetLabels({
         ovMode = string.format("Chế độ: %s | Khu vực: %s | DPS: %s | Rương Boss: %s", gamemode, area, FormatNumber(liveDps), Session.bossChestCooldownText),
         ovCurrency = string.format("Gold: %s | Gems: %s | Vouchers: %s", FormatNumber(gold), FormatNumber(gems), FormatNumber(vouchers)),
         ovRerolls = string.format("Trait Token: %s | Stat Reroll: %s | Stat Lock: %s", FormatNumber(traitTokens), FormatNumber(statRerolls), FormatNumber(statLocks)),
         ovTokens = string.format("Raid Medal: %s | Defense Crystal: %s | Comet Shard: %s", FormatNumber(raidMedals), FormatNumber(defCrystals), FormatNumber(cometShards)),
         ovTeam = string.format("Đội hình: %d trang bị / %d kho | %s", #equipped, totalChamps, tostring(Session.unitHealthSummaryText)),
-        ovAfk = AntiAfkStatusText(),
+        ovAfk = F.AntiAfkStatusText(),
         combatPack = Session.isRecoveringUnits
             and tostring(Session.unitHealthSummaryText)
             or (Session.lastPackEntity
@@ -5287,7 +5294,7 @@ local function UpdateStatus()
         universalFarmStatus = Config.AutoUniversalModeFarm
             and ("Trạng thái: " .. tostring(Session.universalStatusText))
             or "Trạng thái: Đang TẮT Auto Farm Đa Chế Độ",
-        partyStatus = GetPartyStatusSummaryText(),
+        partyStatus = F.GetPartyStatusSummaryText(),
         questLiveStatus = "Tiến độ Quest NPC: " .. tostring(Session.questStatusText),
         merchantLiveStatus = "Thương nhân: " .. tostring(Session.merchantStatusText),
         traitStatus = targetChamp
@@ -5297,9 +5304,9 @@ local function UpdateStatus()
 end
 
 -- ============================================================================
--- [13] GIAO DIỆN HELMHUB (ĐÓNG GÓI TRONG DO..END ĐỂ GIẢI PHÓNG THANH GHI LOCAL CỦA LUAU)
+-- [13] GIAO DIỆN HELMHUB (ĐÓNG GÓI TRONG IIFE FUNCTION ĐỂ TÁCH STACK FRAME LOCAL CỦA LUAU)
 -- ============================================================================
-do
+(function()
     EnsureHighIdentity()
     if not env.HelmGameName then env.HelmGameName = GAME_FOLDER_NAME end
     if not _G.HelmGameName then _G.HelmGameName = GAME_FOLDER_NAME end
@@ -5379,7 +5386,7 @@ do
     end)
 
     local secSys = tab:CreateSector("Hệ Thống, Tối Ưu FPS & Anti-AFK", "Right")
-    AddToggle(secSys, "Chế Độ Giảm Lag / Tối Ưu FPS (Tắt Hiệu Ứng & Rung)", "LowLagMode", ApplyLowLagMode)
+    AddToggle(secSys, "Chế Độ Giảm Lag / Tối Ưu FPS (Tắt Hiệu Ứng & Rung)", "LowLagMode", F.ApplyLowLagMode)
     AddToggle(secSys, "Auto Tắt Gợi Ý Tân Thủ & Chấm Đỏ Tướng Mới", "AutoClearTips")
     AddToggle(secSys, "Auto Cứu Nhân Vật Khi Rơi Khỏi Map (VoidFall)", "AutoVoidReturn")
     AddToggle(secSys, "Anti-AFK Chủ Động (chống kick 20 phút)", "AntiKick")
@@ -5387,7 +5394,7 @@ do
     AddToggle(secSys, "Anti-AFK Có Bấm Phím Di Chuyển Nhẹ (W/S)", "AntiAfkMove")
     AddSlider(secSys, "Chu Kỳ Anti-AFK (giây)", 60, 900, 0, "AntiAfkInterval", math.floor)
     secSys:AddButton("Bấm Thử Anti-AFK Ngay", function()
-        local ok, detail = RunAntiAfk(true)
+        local ok, detail = F.RunAntiAfk(true)
         Notify("Anti-AFK", ok and ("Đã bấm giả: " .. detail) or ("Không cách nào chạy được: " .. tostring(detail)), 5)
     end)
     secSys:AddButton("Lưu Cấu Hình", function()
@@ -5404,7 +5411,7 @@ do
     end)
 end
 
-local function BuildCombatTab()
+function F.BuildCombatTab()
     local tab = Window:CreateTab("Chiến Đấu & Farm")
     local secEngage = tab:CreateSector("Điều Quân & Chọn Multi Quái Theo Từng World", "left")
     AddStatusLabels(secEngage, { "combatPack" })
@@ -5413,22 +5420,22 @@ local function BuildCombatTab()
     local mobMultiDropdown = nil
     AddDropdown(secEngage, "1. Chọn World Để Lọc Quái", C.BossWorlds, "CombatWorld", function(newWorld)
         if mobMultiDropdown then
-            local worldMobs = GetWorldEnemyList(newWorld)
-            local savedKey = GetSelectedMobsKey(newWorld)
+            local worldMobs = F.GetWorldEnemyList(newWorld)
+            local savedKey = F.GetSelectedMobsKey(newWorld)
             mobMultiDropdown:Refresh(worldMobs)
             mobMultiDropdown:Set(Config[savedKey] or {})
         end
     end)
 
-    local initialWorldMobs = GetWorldEnemyList(Config.CombatWorld)
-    local initialMobKey = GetSelectedMobsKey(Config.CombatWorld)
+    local initialWorldMobs = F.GetWorldEnemyList(Config.CombatWorld)
+    local initialMobKey = F.GetSelectedMobsKey(Config.CombatWorld)
     mobMultiDropdown = secEngage:AddDropdown(
         "2. Chọn Multi Quái Của World Đang Chọn",
         initialWorldMobs,
         Config[initialMobKey] or {},
         true,
         function(selectedList)
-            local key = GetSelectedMobsKey(Config.CombatWorld)
+            local key = F.GetSelectedMobsKey(Config.CombatWorld)
             if type(selectedList) == "table" then
                 local copy = {}
                 for _, item in ipairs(selectedList) do
@@ -5449,7 +5456,7 @@ local function BuildCombatTab()
     AddSlider(secEngage, "Số Unit Chết Để Dừng Chờ Hồi Sinh & Bơm 100% Máu", 1, 6, 0, "DeadUnitsPauseThreshold", math.floor)
     AddToggle(secEngage, "Tự Lùi Nhẹ Khỏi Bãi Quái Khi Đang Chờ Unit Hồi Sinh", "StepBackOnRecovery")
     secEngage:AddButton("Điều Quân Đánh Nhóm Gần Nhất Ngay", function()
-        local _, msg = TryEngageNearestPack(false)
+        local _, msg = F.TryEngageNearestPack(false)
         Notify("Chiến Đấu", msg, 3)
     end)
     secEngage:AddButton("Rút Quân Về (RetreatUnits)", function()
@@ -5477,12 +5484,12 @@ local function BuildCombatTab()
     AddDropdown(secSkills, "Chọn Thuốc Buff Theo Thời Gian (Booster)", C.TimedBoostItems, "SelectedTimedBoost")
     AddToggle(secSkills, "Auto Dùng Thuốc Buff Khi Hết Hiệu Lực (UseBooster)", "AutoUseTimedBoost")
     secSkills:AddButton("Dùng Thuốc Buff Đã Chọn Ngay", function()
-        local _, msg = TryUseTimedBooster(Config.SelectedTimedBoost)
+        local _, msg = F.TryUseTimedBooster(Config.SelectedTimedBoost)
         Notify("Booster", msg, 3)
     end)
 end
 
-local function BuildGamemodeTab()
+function F.BuildGamemodeTab()
     local tab = Window:CreateTab("Boss, Raid & Chế Độ")
 
     local secUniversal = tab:CreateSector("Auto Farm Tổng Hợp Đa Chế Độ (Tự Biết Đường Farm)", "left")
@@ -5495,20 +5502,20 @@ local function BuildGamemodeTab()
     AddDropdown(secBoss, "Chọn World Boss", C.BossWorlds, "SelectedBossWorld")
     AddToggle(secBoss, "Auto Khiêu Chiến World Boss (Nút Lẻ)", "AutoChallengeBoss")
     secBoss:AddButton("Khiêu Chiến World Boss Ngay", function()
-        local _, msg = ChallengeSelectedBoss(Config.SelectedBossWorld)
+        local _, msg = F.ChallengeSelectedBoss(Config.SelectedBossWorld)
         Notify("World Boss", msg, 3)
     end)
 
     AddToggle(secBoss, "Auto Đi Tới Nhiệm Vụ Đang Nhận (Auto QuestGo)", "AutoQuestGo")
     secBoss:AddButton("Đi Tới Mục Tiêu Nhiệm Vụ Đang Nhận Ngay (QuestGo)", function()
-        local _, msg = RunActiveQuestGo()
+        local _, msg = F.RunActiveQuestGo()
         Notify("QuestGo", msg, 3)
     end)
 
     AddDropdown(secBoss, "Chọn Màn Cốt Truyện (Story Mission)", C.Missions, "SelectedMission")
     AddToggle(secBoss, "Auto Vào Màn Cốt Truyện Đã Chọn (Nút Lẻ)", "AutoPlayMission")
     secBoss:AddButton("Đặt Mission Vào Lobby & Sẵn Sàng Ngay", function()
-        local _, msg = StartSelectedStoryMission(Config.SelectedMission)
+        local _, msg = F.StartSelectedStoryMission(Config.SelectedMission)
         Notify("Mission", msg, 3)
     end)
 
@@ -5517,11 +5524,11 @@ local function BuildGamemodeTab()
     AddToggle(secBoss, "Chờ Mở Rương Chiến Thắng Xong Mới Vote Kết Quả", "WaitChestBeforeVote")
     AddToggle(secBoss, "Tự Đổi Next -> Retry/Lobby Khi Hết Màn & Bỏ Qua Hỏi Retry Raid", "SmartVoteFallback")
     secBoss:AddButton("Gửi Vote Kết Quả Ngay", function()
-        VoteMatchResults(Config.MatchVoteOption, true)
+        F.VoteMatchResults(Config.MatchVoteOption, true)
         Notify("Match Results", "Đã chọn: " .. tostring(Config.MatchVoteOption), 2)
     end)
     secBoss:AddButton("Rời Trận Đang Đánh Về Sảnh Ngay (Forfeit / LeaveRun)", function()
-        local _, msg = LeaveCurrentRun()
+        local _, msg = F.LeaveCurrentRun()
         Notify("Rời Trận", msg, 3)
     end)
 
@@ -5540,9 +5547,9 @@ local function BuildGamemodeTab()
 
     local secParty = tab:CreateSector("Quản Lý Tổ Đội / Party Từ Xa (Invite / Kick / Promote)", "Right")
     AddStatusLabels(secParty, { "partyStatus" })
-    AddDropdown(secParty, "Chế Độ Tự Tạo Phòng Khi Chưa Có Party", PartyCreateModes, "PartyCreateMode")
+    AddDropdown(secParty, "Chế Độ Tự Tạo Phòng Khi Chưa Có Party", F.PartyCreateModes, "PartyCreateMode")
 
-    local initialPlayers = GetServerOtherPlayerOptions()
+    local initialPlayers = F.GetServerOtherPlayerOptions()
     if not table.find(initialPlayers, Config.SelectedPartyPlayer) then
         Config.SelectedPartyPlayer = initialPlayers[1]
     end
@@ -5551,7 +5558,7 @@ local function BuildGamemodeTab()
     local function RefreshPartyPlayerDropdown()
         if not partyPlayerDropdown then return end
         EnsureHighIdentity()
-        local list = GetServerOtherPlayerOptions()
+        local list = F.GetServerOtherPlayerOptions()
         pcall(function()
             partyPlayerDropdown:Refresh(list)
             if not table.find(list, Config.SelectedPartyPlayer) then
@@ -5574,32 +5581,32 @@ local function BuildGamemodeTab()
     end)
     secParty:AddButton("Mời Người Chơi Đã Chọn Vào Tổ Đội (Lobby_InvitePlayer)", function()
         task.spawn(function()
-            local _, msg = InviteUserToParty(Config.SelectedPartyPlayer)
+            local _, msg = F.InviteUserToParty(Config.SelectedPartyPlayer)
             Notify("Tổ Đội (Party)", msg, 3)
         end)
     end)
     secParty:AddButton("Mời Toàn Bộ Bạn Bè Trong Server Vào Tổ Đội", function()
         task.spawn(function()
-            local count = InviteMultiplePlayersToParty(true)
+            local count = F.InviteMultiplePlayersToParty(true)
             Notify("Tổ Đội (Party)", string.format("Đã gửi lời mời tới %d bạn bè trong server.", count), 3)
         end)
     end)
     secParty:AddButton("Mời Toàn Bộ Người Chơi Trong Server Vào Tổ Đội", function()
         task.spawn(function()
-            local count = InviteMultiplePlayersToParty(false)
+            local count = F.InviteMultiplePlayersToParty(false)
             Notify("Tổ Đội (Party)", string.format("Đã gửi lời mời tới %d người chơi trong server.", count), 3)
         end)
     end)
     secParty:AddButton("Hủy Lời Mời Đã Gửi Tới Người Chơi Này (Lobby_CancelInvite)", function()
-        local _, msg = CancelPartyInviteForUser(Config.SelectedPartyPlayer)
+        local _, msg = F.CancelPartyInviteForUser(Config.SelectedPartyPlayer)
         Notify("Tổ Đội (Party)", msg, 3)
     end)
     secParty:AddButton("Nhường Chủ Phòng Cho Người Chơi Này (Lobby_Promote)", function()
-        local _, msg = PromotePartyMember(Config.SelectedPartyPlayer)
+        local _, msg = F.PromotePartyMember(Config.SelectedPartyPlayer)
         Notify("Tổ Đội (Party)", msg, 3)
     end)
     secParty:AddButton("Đuổi (Kick) Người Chơi Này Khỏi Tổ Đội (Lobby_Kick)", function()
-        local _, msg = KickPartyMember(Config.SelectedPartyPlayer)
+        local _, msg = F.KickPartyMember(Config.SelectedPartyPlayer)
         Notify("Tổ Đội (Party)", msg, 3)
     end)
     AddToggle(secParty, "Auto Mời Bạn Bè Trong Server Vào Tổ Đội", "AutoInviteFriendsToParty")
@@ -5617,7 +5624,7 @@ local function BuildGamemodeTab()
     end)
 end
 
-local function BuildChampionTab()
+function F.BuildChampionTab()
     local tab = Window:CreateTab("Triệu Hồi & Chiến Binh")
     local secSummon = tab:CreateSector("Triệu Hồi Nhanh & Auto-Dismantle Server", "left")
     AddDropdown(secSummon, "Chọn Banner Triệu Hồi", C.Banners, "SelectedBanner")
@@ -5626,7 +5633,7 @@ local function BuildChampionTab()
     AddToggle(secSummon, "Auto Mở Khóa Banner Đang Chọn", "AutoUnlockBanner")
     AddToggle(secSummon, "Auto Triệu Hồi Liên Tục (PullFromBanner)", "AutoSummon")
     secSummon:AddButton("Triệu Hồi 1 Lượt Ngay", function()
-        local ok, res = PullBannerOnce()
+        local ok, res = F.PullBannerOnce()
         Notify("Triệu Hồi", ok and string.format("Đã triệu hồi thành công (%d kết quả)!", #(res.results or res)) or ("Thất bại: " .. tostring(res)), 3)
     end)
     secSummon:AddButton("Mở Khóa Banner Đang Chọn Ngay", function()
@@ -5637,17 +5644,17 @@ local function BuildChampionTab()
     AddDropdown(secSummon, "Server Giữ Lại Tướng Rare Khi Quay", C.ServerAutoDismantleModes, "ServerKeepRare")
     AddDropdown(secSummon, "Server Giữ Lại Tướng Epic Khi Quay", C.ServerAutoDismantleModes, "ServerKeepEpic")
     AddDropdown(secSummon, "Server Giữ Lại Tướng Legendary Khi Quay", C.ServerAutoDismantleModes, "ServerKeepLegendary")
-    secSummon:AddButton("Áp Dụng Auto-Dismantle Khi Quay Lên Server", ApplyServerSummonAutoDismantle)
+    secSummon:AddButton("Áp Dụng Auto-Dismantle Khi Quay Lên Server", F.ApplyServerSummonAutoDismantle)
 
     local secTeam = tab:CreateSector("Đội Hình, Cho Ăn, Khóa, Phân Rã, Nâng Sao & Tiến Hóa", "left")
     AddToggle(secTeam, "Auto Trang Bị Đội Hình Mạnh Nhất (EquipBest)", "AutoEquipBest")
     secTeam:AddButton("Trang Bị Đội Hình Mạnh Nhất Ngay", function()
-        local _, msg = EquipBestChampions(true)
+        local _, msg = F.EquipBestChampions(true)
         Notify("Đội Hình", msg, 3)
     end)
     AddToggle(secTeam, "Auto Cho Đội Hình Ăn Trái Cây Lên Cấp (FeedChampion)", "AutoFeedEquipped")
     secTeam:AddButton("Cho Đội Hình Ăn Trái Cây Ngay", function()
-        local _, msg = AutoFeedEquippedChampions()
+        local _, msg = F.AutoFeedEquippedChampions()
         Notify("Cho Ăn", msg, 3)
     end)
     AddToggle(secTeam, "Auto Khóa Chiến Binh Shiny / Mythic / Secret", "AutoLockRare")
@@ -5656,14 +5663,14 @@ local function BuildChampionTab()
     AddToggle(secTeam, "Giữ Lại Chiến Binh Đã Nâng Sao Khi Phân Rã", "DismantleKeepStarred")
     AddToggle(secTeam, "Auto Phân Rã Chiến Binh Rác Trong Kho", "AutoDismantle")
     secTeam:AddButton("Phân Rã Chiến Binh Rác Ngay", function()
-        local _, msg = AutoDismantleLowRarityChampions()
+        local _, msg = F.AutoDismantleLowRarityChampions()
         Notify("Phân Rã", msg, 3)
     end)
     AddToggle(secTeam, "Auto Ghép Bản Sao Nâng Sao (Auto Ascend)", "AutoAscend")
     AddToggle(secTeam, "Auto Tiến Hóa Chiến Binh Khi Đủ Nguyên Liệu (EvolveRules)", "AutoEvolve")
     AddToggle(secTeam, "Tiến Hóa Cả Chiến Binh Trong Kho (Không Chỉ Đội Hình)", "AutoEvolveAllInventory")
     secTeam:AddButton("Kiểm Tra & Tiến Hóa Chiến Binh Ngay", function()
-        local _, msg = AutoEvolveEquipped()
+        local _, msg = F.AutoEvolveEquipped()
         Notify("Tiến Hóa", msg, 3)
     end)
 
@@ -5674,19 +5681,19 @@ local function BuildChampionTab()
     AddDropdown(secTrait, "Hoặc Dừng Khi Đạt Độ Hiếm", C.TraitRarities, "TargetTraitRarity")
     AddToggle(secTrait, "Auto Reroll Trait (Dừng Khi Đạt Mục Tiêu)", "AutoTraitReroll")
     secTrait:AddButton("Quay Thử 1 Lần Trait Ngay", function()
-        task.spawn(StepTraitReroll)
+        task.spawn(F.StepTraitReroll)
     end)
 
     AddDropdown(secTrait, "Bậc Chỉ Số Mục Tiêu (Strength / Spirit / Vitality)", C.StatGrades, "TargetStatGrade")
     AddToggle(secTrait, "Tự Khóa Dòng Đã Đạt Bậc Mục Tiêu (Dùng Stat Lock)", "AutoLockReachedStats")
     AddToggle(secTrait, "Auto Quay Chỉ Số Chiến Binh (RerollChampionStats)", "AutoStatReroll")
     secTrait:AddButton("Quay Thử 1 Lần Chỉ Số Ngay", function()
-        task.spawn(StepStatReroll)
+        task.spawn(F.StepStatReroll)
     end)
 
     AddDropdown(secTrait, "Chọn Máy / Cổng Boss / Nâng Cấp Để Sửa", C.Repairs, "SelectedRepair")
     secTrait:AddButton("Sửa / Mở Khóa Mục Đang Chọn Ngay", function()
-        local ok, err = RepairSingle(Config.SelectedRepair)
+        local ok, err = F.RepairSingle(Config.SelectedRepair)
         Notify("Sửa Chữa", ok and ("Đã mở khóa: " .. Config.SelectedRepair) or ("Không sửa được: " .. tostring(err)), 3)
     end)
     AddToggle(secTrait, "Auto Sửa & Mở Khóa Mọi Máy / Nâng Cấp Khi Đủ Tiền", "AutoRepairAll")
@@ -5709,7 +5716,7 @@ local function BuildChampionTab()
     end)
 end
 
-local function BuildQuestTab()
+function F.BuildQuestTab()
     local tab = Window:CreateTab("Nhiệm Vụ & Cửa Hàng")
     local secWorldQuest = tab:CreateSector("Auto Nhiệm Vụ NPC Theo Từng World", "left")
     AddStatusLabels(secWorldQuest, { "questLiveStatus" })
@@ -5740,7 +5747,7 @@ local function BuildQuestTab()
     AddToggle(secWorldQuest, "Tự Vào Màn Mission / Boss Khi Nhiệm Vụ NPC Yêu Cầu", "AutoRunQuestMissionsAndBoss")
     secWorldQuest:AddButton("Chạy Bước Nhiệm Vụ NPC Ngay", function()
         task.spawn(function()
-            StepWorldNpcQuestEngine(true)
+            F.StepWorldNpcQuestEngine(true)
             Notify("Nhiệm Vụ NPC", Session.questStatusText, 3)
         end)
     end)
@@ -5755,10 +5762,10 @@ local function BuildQuestTab()
     AddToggle(secQuest, "Auto Nhận Thưởng Lặp Lại Season Pass (Repeatables)", "AutoClaimSeasonRepeatables")
     secQuest:AddButton("Nhận Toàn Bộ Milestones + Daily + Season Pass Ngay", function()
         task.spawn(function()
-            ClaimAllMilestonesSmart()
-            ClaimDailyBonusSmart()
-            ClaimSeasonPassSmart()
-            ClaimAllSeasonRepeatables()
+            F.ClaimAllMilestonesSmart()
+            F.ClaimDailyBonusSmart()
+            F.ClaimSeasonPassSmart()
+            F.ClaimAllSeasonRepeatables()
             Notify("Nhận Thưởng", "Đã kiểm tra & nhận Milestones, Daily Bonus & Season Pass!", 3)
         end)
     end)
@@ -5768,16 +5775,16 @@ local function BuildQuestTab()
 
     local merchantItemMultiDropdown = nil
     local function GetFormattedSavedMerchantSelection(merchantId)
-        local savedKey = GetSelectedMerchantItemsKey(merchantId)
+        local savedKey = F.GetSelectedMerchantItemsKey(merchantId)
         local rawSaved = Config[savedKey]
         local validSet = {}
-        for _, opt in ipairs(GetMerchantItemList(merchantId)) do
-            validSet[ResolveMerchantItemId(opt)] = opt
+        for _, opt in ipairs(F.GetMerchantItemList(merchantId)) do
+            validSet[F.ResolveMerchantItemId(opt)] = opt
         end
         local formatted = {}
         if type(rawSaved) == "table" then
             for _, item in ipairs(rawSaved) do
-                local cleanId = ResolveMerchantItemId(item)
+                local cleanId = F.ResolveMerchantItemId(item)
                 if validSet[cleanId] then
                     formatted[#formatted + 1] = validSet[cleanId]
                 end
@@ -5788,13 +5795,13 @@ local function BuildQuestTab()
 
     AddDropdown(secMerchant, "1. Chọn Thương Nhân (Merchant)", C.Merchants, "SelectedMerchant", function(newMerchant)
         if merchantItemMultiDropdown then
-            local mItems = GetMerchantItemList(newMerchant)
+            local mItems = F.GetMerchantItemList(newMerchant)
             merchantItemMultiDropdown:Refresh(mItems)
             merchantItemMultiDropdown:Set(GetFormattedSavedMerchantSelection(newMerchant))
         end
     end)
 
-    local initialMerchantItems = GetMerchantItemList(Config.SelectedMerchant)
+    local initialMerchantItems = F.GetMerchantItemList(Config.SelectedMerchant)
     local initialFormattedSelection = GetFormattedSavedMerchantSelection(Config.SelectedMerchant)
     if #initialFormattedSelection > 0 then
         Config.FilterMerchantBySelectedItems = true
@@ -5809,11 +5816,11 @@ local function BuildQuestTab()
                 EnsureHighIdentity()
                 return
             end
-            local key = GetSelectedMerchantItemsKey(Config.SelectedMerchant)
+            local key = F.GetSelectedMerchantItemsKey(Config.SelectedMerchant)
             local copy = {}
             if type(selectedList) == "table" then
                 for _, item in ipairs(selectedList) do
-                    local cleanId = ResolveMerchantItemId(item)
+                    local cleanId = F.ResolveMerchantItemId(item)
                     if type(cleanId) == "string" and cleanId ~= "" then
                         copy[#copy + 1] = cleanId
                     end
@@ -5838,27 +5845,27 @@ local function BuildQuestTab()
     AddToggle(secMerchant, "Mua Tối Đa Số Gói Đủ Tiền (Max Affordable Packs)", "MerchantBuyMaxPacks")
     secMerchant:AddButton("Mua Các Món Đã Chọn (Hoặc Toàn Bộ) Ngay", function()
         task.spawn(function()
-            local _, detailMsg = BuyAllMerchantOffers(Config.SelectedMerchant, true)
+            local _, detailMsg = F.BuyAllMerchantOffers(Config.SelectedMerchant, true)
             Notify("Thương Nhân", detailMsg, 4)
         end)
     end)
     secMerchant:AddButton("Mở Cửa Sổ Thương Nhân Đang Chọn Trên Màn Hình", function()
         task.spawn(function()
-            OpenMerchantWindowOnScreen(Config.SelectedMerchant)
+            F.OpenMerchantWindowOnScreen(Config.SelectedMerchant)
         end)
     end)
 
     local secShop = tab:CreateSector("Đổi Voucher Gamepass, Quà Store & Giftcode", "Right")
     AddToggle(secShop, "Auto Nhận Quà Miễn Phí Trong Store & Hòm Quà (Free/Gift)", "AutoClaimFreeStore")
     secShop:AddButton("Nhận Quà Miễn Phí & Hòm Quà Ngay", function()
-        local count = ClaimFreeStoreAndGifts()
+        local count = F.ClaimFreeStoreAndGifts()
         Notify("Store & Gift", string.format("Đã nhận %d gói miễn phí / quà tặng.", count), 3)
     end)
 
     AddDropdown(secShop, "Chọn Gamepass Đổi Bằng Voucher", C.VoucherPasses, "SelectedVoucherPass")
     AddToggle(secShop, "Auto Đổi Gamepass Đã Chọn Khi Đủ Voucher", "AutoBuyVoucherPass")
     secShop:AddButton("Đổi Gamepass Đã Chọn Bằng Voucher Ngay", function()
-        local _, msg = TryBuyPassWithVouchers(Config.SelectedVoucherPass)
+        local _, msg = F.TryBuyPassWithVouchers(Config.SelectedVoucherPass)
         Notify("Voucher Gamepass", msg, 4)
     end)
 
@@ -5867,31 +5874,31 @@ local function BuildQuestTab()
         TriggerSave()
     end)
     secShop:AddButton("Nhập Giftcode Đã Điền", function()
-        task.spawn(RedeemCodeString, Config.CodeInputText)
+        task.spawn(F.RedeemCodeString, Config.CodeInputText)
     end)
     secShop:AddButton("Quét & Nhập Toàn Bộ Code Từ Server (CodeListGet)", function()
-        task.spawn(FetchAndRedeemServerCodes)
+        task.spawn(F.FetchAndRedeemServerCodes)
     end)
 end
 
-local function BuildTeleportTab()
+function F.BuildTeleportTab()
     local tab = Window:CreateTab("Dịch Chuyển & Cửa Sổ")
     local secTravel = tab:CreateSector("Dịch Chuyển Thế Giới & HubWarp", "left")
     AddDropdown(secTravel, "Chọn Thế Giới (Overworld Travel)", C.Worlds, "SelectedWorld")
     secTravel:AddButton("Dịch Chuyển Tới Thế Giới Đã Chọn", function()
-        task.spawn(TravelToWorld, Config.SelectedWorld, false)
+        task.spawn(F.TravelToWorld, Config.SelectedWorld, false)
     end)
     AddDropdown(secTravel, "Chọn Điểm Warp Tại Champion City", C.CityWarps, "SelectedCityWarp")
     secTravel:AddButton("Warp Tới Điểm Trong Champion City", function()
-        task.spawn(HubWarpTo, Config.SelectedCityWarp)
+        task.spawn(F.HubWarpTo, Config.SelectedCityWarp)
     end)
     AddDropdown(secTravel, "Chọn Điểm Warp Trong World Chiến Đấu", C.WorldWarps, "SelectedWorldWarp")
     secTravel:AddButton("Warp Tới Điểm Trong World Hiện Tại", function()
-        task.spawn(HubWarpTo, Config.SelectedWorldWarp)
+        task.spawn(F.HubWarpTo, Config.SelectedWorldWarp)
     end)
 
     local secUi = tab:CreateSector("Tốc Độ Chạy, Mở Cửa Sổ Từ Xa & ESP", "Right")
-    AddToggle(secUi, "Luôn Chạy Nhanh Của Game (AutoSprint = 32)", "AutoSprint", ApplyAutoSprint)
+    AddToggle(secUi, "Luôn Chạy Nhanh Của Game (AutoSprint = 32)", "AutoSprint", F.ApplyAutoSprint)
     AddToggle(secUi, "Ghi Đè Tốc Độ Di Chuyển Tùy Chỉnh (WalkSpeed)", "EnableCustomWalkSpeed", function(on)
         if not on then
             local hum = GetHumanoid()
@@ -5904,7 +5911,7 @@ local function BuildTeleportTab()
 
     AddDropdown(secUi, "Chọn Cửa Sổ Tính Năng (Window)", C.Windows, "SelectedWindow")
     secUi:AddButton("Mở Cửa Sổ Đã Chọn Ngay", function()
-        OpenGameWindow(Config.SelectedWindow)
+        F.OpenGameWindow(Config.SelectedWindow)
     end)
     AddToggle(secUi, "ESP NPC (Màu Xanh Lam)", "ESPNpc")
     AddToggle(secUi, "ESP Rương / Chest (Màu Vàng)", "ESPChest")
@@ -5912,57 +5919,61 @@ local function BuildTeleportTab()
 end
 
     BuildOverviewTab()
-    BuildCombatTab()
-    BuildGamemodeTab()
-    BuildChampionTab()
-    BuildQuestTab()
-    BuildTeleportTab()
-end
+    F.BuildCombatTab()
+    F.BuildGamemodeTab()
+    F.BuildChampionTab()
+    F.BuildQuestTab()
+    F.BuildTeleportTab()
+end)()
 uiFullyLoaded = true
 EnsureHighIdentity()
 SaveConfig()
-pcall(UpdateStatus)
+pcall(F.UpdateStatus)
+
+task.spawn(function()
+    pcall(EnrichConstantsFromRuntime)
+end)
 
 if Config.AutoSprint then
     task.spawn(function()
-        SafeCallGame(ApplyAutoSprint, true)
+        SafeCallGame(F.ApplyAutoSprint, true)
     end)
 end
 if Config.LowLagMode then
     task.spawn(function()
-        SafeCallGame(ApplyLowLagMode, true)
+        SafeCallGame(F.ApplyLowLagMode, true)
     end)
 end
 
 -- ============================================================================
 -- [14] VÒNG LẶP NỀN
 -- ============================================================================
-ConnectNetworkEventListeners()
+F.ConnectNetworkEventListeners()
 
 -- Vòng lặp điều quân, Auto Farm Đa Chế Độ, Auto Đánh & Tele Cho Nhiệm Vụ NPC, nhặt drop & giữ WalkSpeed tùy chỉnh
 StartLoop(0.35, function()
     if Config.AutoUniversalModeFarm then
-        StepUniversalModeFarm()
+        F.StepUniversalModeFarm()
     elseif Config.AutoWorldNpcQuestLoop then
         local gamemode = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld")
         if gamemode ~= "overworld" then
-            StepQuestActiveRunCombat(gamemode, Session.activeQuestDoneInRun)
+            F.StepQuestActiveRunCombat(gamemode, Session.activeQuestDoneInRun)
         else
             if Session.questCombatActive or Config.AutoEngage then
-                local engaged = TryEngageNearestPack(true)
+                local engaged = F.TryEngageNearestPack(true)
                 if engaged then
-                    FireAllEquippedAbilities()
+                    F.FireAllEquippedAbilities()
                 end
             end
-            ScanAndClaimEcsDrops()
+            F.ScanAndClaimEcsDrops()
         end
     else
         if Config.AutoEngage then
             local inRun = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld") ~= "overworld"
-            TryEngageNearestPack(inRun)
+            F.TryEngageNearestPack(inRun)
         end
         if Config.AutoCollectDrops then
-            ScanAndClaimEcsDrops()
+            F.ScanAndClaimEcsDrops()
         end
     end
     if Config.EnableCustomWalkSpeed then
@@ -5977,12 +5988,12 @@ end)
 StartLoop(0.25, function()
     if Config.AutoAbilities and not Config.AutoUniversalModeFarm and os.clock() - Session.lastAbilityAt >= (tonumber(Config.AbilityInterval) or 1.0) then
         Session.lastAbilityAt = os.clock()
-        FireAllEquippedAbilities()
+        F.FireAllEquippedAbilities()
     end
 end)
 
 -- Dọn dẹp định kỳ bảng cache drop & chest đã nhặt để tránh phình bộ nhớ khi treo máy nhiều giờ
-local function PruneSessionCaches()
+function F.PruneSessionCaches()
     local now = os.clock()
     if now - Session.lastSessionCachePruneAt < 60 then return end
     Session.lastSessionCachePruneAt = now
@@ -6000,10 +6011,10 @@ end
 
 -- Vòng lặp mở chest, bỏ qua hội thoại, chuyển cảnh, VoidFall, Raid/Defense/MatchResults
 StartLoop(1.0, function()
-    PruneSessionCaches()
+    F.PruneSessionCaches()
     local gamemode = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld")
     if Config.AutoOpenChests and not Config.AutoUniversalModeFarm then
-        ScanAndOpenChests()
+        F.ScanAndOpenChests()
     end
     if Config.AutoSkipDialogue then
         if gamemode ~= "overworld" then
@@ -6018,7 +6029,7 @@ StartLoop(1.0, function()
         FireRemote("PlayerArrival_Presented")
     end
     if Config.AutoClearTips then
-        ClearTutorialTipsAndUnseen()
+        F.ClearTutorialTipsAndUnseen()
     end
     if Config.AutoVoidReturn then
         local hrp = GetRootPart()
@@ -6037,16 +6048,16 @@ StartLoop(1.0, function()
     end
     if not Config.AutoUniversalModeFarm then
         if (Config.AutoRaidVoteCard or Config.AutoRaidReadyNext) and gamemode == "raid" then
-            HandleRaidIntermission(false)
+            F.HandleRaidIntermission(false)
         end
         if Config.AutoDefenseNextWave and gamemode == "defense" then
             FireRemote("Defense_RequestNextWave")
         end
         if Config.AutoMatchVote and gamemode ~= "overworld" then
-            VoteMatchResults(Config.MatchVoteOption)
+            F.VoteMatchResults(Config.MatchVoteOption)
         end
         if Config.AutoLobbyReady and gamemode == "overworld" then
-            local lobby = GetCurrentLobbyState()
+            local lobby = F.GetCurrentLobbyState()
             if type(lobby) == "table" then
                 local alreadyReady = false
                 if type(lobby.readyUserIds) == "table" then
@@ -6074,75 +6085,75 @@ StartLoop(0.4, function()
         end
     end
     if Config.AutoSummon then
-        PullBannerOnce()
+        F.PullBannerOnce()
     end
     if Config.AutoTraitReroll then
-        StepTraitReroll()
+        F.StepTraitReroll()
     end
     if Config.AutoStatReroll then
-        StepStatReroll()
+        F.StepStatReroll()
     end
 end)
 
 -- Vòng lặp đội hình, cho ăn, khóa, phân rã, nâng sao, tiến hóa, sửa máy, nhiệm vụ NPC theo World, booster & cửa hàng
 StartLoop(2.5, function()
     local isOverworld = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld") == "overworld"
-    local pausedForHeal = CheckTeamRecoveryPause()
+    local pausedForHeal = F.CheckTeamRecoveryPause()
     if not Config.AutoUniversalModeFarm and not pausedForHeal then
         if Config.AutoChallengeBoss and isOverworld then
-            ChallengeSelectedBoss(Config.SelectedBossWorld)
+            F.ChallengeSelectedBoss(Config.SelectedBossWorld)
         end
         if Config.AutoPlayMission and isOverworld then
-            StartSelectedStoryMission(Config.SelectedMission)
+            F.StartSelectedStoryMission(Config.SelectedMission)
         end
         if Config.AutoQuestGo and isOverworld then
-            RunActiveQuestGo()
+            F.RunActiveQuestGo()
         end
     end
     if Config.AutoUseTimedBoost then
-        TryUseTimedBooster(Config.SelectedTimedBoost)
+        F.TryUseTimedBooster(Config.SelectedTimedBoost)
     end
     if Config.AutoLockRare then
-        AutoLockRareChampions()
+        F.AutoLockRareChampions()
     end
     if Config.AutoEquipBest then
-        EquipBestChampions()
+        F.EquipBestChampions()
     end
     if Config.AutoFeedEquipped then
-        AutoFeedEquippedChampions()
+        F.AutoFeedEquippedChampions()
     end
     if Config.AutoAscend then
-        AutoAscendAllPossible()
+        F.AutoAscendAllPossible()
     end
     if Config.AutoEvolve then
-        AutoEvolveEquipped()
+        F.AutoEvolveEquipped()
     end
     if Config.AutoDismantle then
-        AutoDismantleLowRarityChampions()
+        F.AutoDismantleLowRarityChampions()
     end
     if Config.AutoRepairAll then
-        AutoRepairAllUnrepaired()
+        F.AutoRepairAllUnrepaired()
     end
     if Config.AutoCompleteTutorial and not pausedForHeal then
-        StepAutoTutorial()
+        F.StepAutoTutorial()
     end
     if Config.AutoInviteFriendsToParty and isOverworld then
-        InviteMultiplePlayersToParty(true)
+        F.InviteMultiplePlayersToParty(true)
     end
     if Config.AutoWorldNpcQuestLoop or Config.AutoAcceptQuests or Config.AutoClaimQuests or Config.AutoFindQuestItems then
-        ScanAndHandleQuests()
+        F.ScanAndHandleQuests()
     end
     if Config.AutoClaimMilestones then
-        ClaimAllMilestonesSmart()
+        F.ClaimAllMilestonesSmart()
     end
     if Config.AutoClaimDaily then
-        ClaimDailyBonusSmart()
+        F.ClaimDailyBonusSmart()
     end
     if Config.AutoClaimSeasonPass then
-        ClaimSeasonPassSmart()
+        F.ClaimSeasonPassSmart()
     end
     if Config.AutoClaimSeasonRepeatables then
-        ClaimAllSeasonRepeatables()
+        F.ClaimAllSeasonRepeatables()
     end
     if Config.AutoClaimCountdownPack then
         if ReadStore("CountdownPackClaimed", "boolean", true) ~= true then
@@ -6150,28 +6161,28 @@ StartLoop(2.5, function()
         end
     end
     if Config.AutoClaimFreeStore then
-        ClaimFreeStoreAndGifts()
+        F.ClaimFreeStoreAndGifts()
     end
     if Config.AutoBuyVoucherPass then
-        TryBuyPassWithVouchers(Config.SelectedVoucherPass)
+        F.TryBuyPassWithVouchers(Config.SelectedVoucherPass)
     end
     if Config.AutoBuyMerchant then
-        BuyAllMerchantOffers(Config.SelectedMerchant)
+        F.BuyAllMerchantOffers(Config.SelectedMerchant)
     end
 end)
 
 -- Vòng lặp ESP & cập nhật trạng thái UI
 StartLoop(1.0, function()
-    for _, esp in ipairs(EspKinds) do
-        pcall(SyncEsp, esp.kind, Config[esp.cfg], esp.targets, esp.color)
+    for _, esp in ipairs(F.EspKinds) do
+        pcall(F.SyncEsp, esp.kind, Config[esp.cfg], esp.targets, esp.color)
     end
-    UpdateStatus()
+    F.UpdateStatus()
 end)
 
 TrackConnection(UserInputService.InputBegan:Connect(function()
-    AntiAfk.lastInput = Workspace:GetServerTimeNow()
+    F.AntiAfk.lastInput = Workspace:GetServerTimeNow()
 end))
-StartLoop(5.0, RunAntiAfk)
+StartLoop(5.0, F.RunAntiAfk)
 
 -- ============================================================================
 -- [15] DỌN DẸP AN TOÀN (REVERSE PATH)
@@ -6189,7 +6200,7 @@ env.__HelmACXCleanup = function()
     Session.questOverrideMobIds = nil
     Session.questOverrideElement = nil
     if wasLowLag then
-        SafeCallGame(ApplyLowLagMode, false)
+        SafeCallGame(F.ApplyLowLagMode, false)
     end
     if wasCustomSpeed then
         local hum = GetHumanoid()
