@@ -1,10 +1,10 @@
--- HelmHub | Anime Champions X v1.2
+-- HelmHub | Anime Champions X v1.4
 -- Place: Anime Champions X [RUNS] (PlaceId 79755351995296, UniverseId 10778033190)
 -- Nguồn dữ liệu: dump Anime Champions X PlaceVersion 4. Hằng số dự phòng nằm trong bảng Known và được đọc lại
 -- từ ReplicatedStorage.Config.* / ReplicatedStorage.Shared.* lúc chạy qua SafeRequire + EnsureHighIdentity.
 -- Trạng thái: đã xử lý triệt để lỗi hạ thread identity (lacking capability Plugin), tối ưu hiệu năng (Remote/ECS/Store/UI Cache) và nâng cấp toàn diện theo Logic/Rules của game.
 
-local SCRIPT_VERSION = "1.2"
+local SCRIPT_VERSION = "1.4"
 
 local env = (typeof(getgenv) == "function" and getgenv()) or _G
 if env.__HelmACXCleanup and typeof(env.__HelmACXCleanup) == "function" then
@@ -356,35 +356,35 @@ local Known = {
         ShardMerchant = "comet_shard"
     },
     MerchantItemLabels = {
-        gold_team_slot = "Ô Đội +1 Tướng (100K Gold) [gold_team_slot]",
-        gold_team_slot_2 = "Ô Đội II +1 Tướng (100M Gold) [gold_team_slot_2]",
-        auto_abilities = "Tự Dùng Kỹ Năng (1K Gold) [auto_abilities]",
-        storage_1 = "Mở Rộng Kho I +25 (1K Gold) [storage_1]",
-        storage_2 = "Mở Rộng Kho II +25 (100K Gold) [storage_2]",
-        storage_3 = "Mở Rộng Kho III +50 (10M Gold) [storage_3]",
-        alien_fruit = "Trái Alien / Ki (Lv 10) [alien_fruit]",
-        pirate_fruit = "Trái Pirate / Hải Tặc (Lv 20) [pirate_fruit]",
-        ninja_fruit = "Trái Ninja / Nguyên Tố (1K Gold - Lv 30) [ninja_fruit]",
-        city_fruit = "Trái Curse City / Bị Nguyền (2.5K Gold - Lv 40) [city_fruit]",
-        ant_fruit = "Trái Ant / Kiến (Lv 50) [ant_fruit]",
-        secret_fruit = "Trái Bí Ẩn / Secret Fruit [secret_fruit]",
-        trait_tokens = "Trait Tokens ( Đá Quay Trait) [trait_tokens]",
-        luck_booster = "Thuốc May Mắn (Luck Booster) [luck_booster]",
-        super_luck_booster = "Siêu Thuốc May Mắn (Super Luck) [super_luck_booster]",
-        gems = "Đá Quý (Gems x100) [gems]"
+        gold_team_slot = "[Upgrade] Ô Đội I +1 Tướng (100K Gold) [gold_team_slot]",
+        gold_team_slot_2 = "[Upgrade] Ô Đội II +1 Tướng (100M Gold) [gold_team_slot_2]",
+        auto_abilities = "[Upgrade] Tự Dùng Kỹ Năng (1K Gold) [auto_abilities]",
+        storage_1 = "[Upgrade] Mở Rộng Kho I +25 (1K Gold) [storage_1]",
+        storage_2 = "[Upgrade] Mở Rộng Kho II +25 (100K Gold) [storage_2]",
+        storage_3 = "[Upgrade] Mở Rộng Kho III +50 (10M Gold) [storage_3]",
+        alien_fruit = "[Vật phẩm] Trái Alien / Ki (100 Gold - Lv 10) [alien_fruit]",
+        pirate_fruit = "[Vật phẩm] Trái Hải Tặc / Tide (300 Gold - Lv 20) [pirate_fruit]",
+        ninja_fruit = "[Vật phẩm] Trái Nguyên Tố / Ninja (1K Gold - Lv 30) [ninja_fruit]",
+        city_fruit = "[Vật phẩm] Trái Bị Nguyền / Curse City (2.5K Gold - Lv 40) [city_fruit]",
+        ant_fruit = "[Vật phẩm] Trái Kiến / Amber (8K Gold - Lv 50) [ant_fruit]",
+        secret_fruit = "[Vật phẩm] Trái Bí Ẩn / Cosmic (+1 Level) [secret_fruit]",
+        trait_tokens = "[Vật phẩm] Trait Tokens (Đá Quay Trait) [trait_tokens]",
+        luck_booster = "[Vật phẩm] Thuốc May Mắn (Luck Booster) [luck_booster]",
+        super_luck_booster = "[Vật phẩm] Siêu Thuốc May Mắn (Super Luck) [super_luck_booster]",
+        gems = "[Vật phẩm] Đá Quý (Gems x100) [gems]"
     },
     MerchantUpgradeDefsFallback = {
-        gold_team_slot = { id = "gold_team_slot", price = 100000, currencyId = "gold", released = true },
-        gold_team_slot_2 = { id = "gold_team_slot_2", price = 100000000, currencyId = "gold", requires = "gold_team_slot", released = true },
-        auto_abilities = { id = "auto_abilities", price = 1000, currencyId = "gold", released = true },
-        storage_1 = { id = "storage_1", price = 1000, currencyId = "gold", released = false },
-        storage_2 = { id = "storage_2", price = 100000, currencyId = "gold", requires = "storage_1", released = false },
-        storage_3 = { id = "storage_3", price = 10000000, currencyId = "gold", requires = "storage_2", released = false }
+        gold_team_slot = { id = "gold_team_slot", label = "Ô Đội I (+1 Tướng)", price = 100000, currencyId = "gold", released = true },
+        gold_team_slot_2 = { id = "gold_team_slot_2", label = "Ô Đội II (+1 Tướng - 100M Gold)", price = 100000000, currencyId = "gold", requires = "gold_team_slot", released = true },
+        auto_abilities = { id = "auto_abilities", label = "Tự Dùng Kỹ Năng", price = 1000, currencyId = "gold", released = true },
+        storage_1 = { id = "storage_1", label = "Mở Rộng Kho I (+25)", price = 1000, currencyId = "gold", released = false },
+        storage_2 = { id = "storage_2", label = "Mở Rộng Kho II (+25)", price = 100000, currencyId = "gold", requires = "storage_1", released = false },
+        storage_3 = { id = "storage_3", label = "Mở Rộng Kho III (+50)", price = 10000000, currencyId = "gold", requires = "storage_2", released = false }
     },
     MerchantOfferDefsFallback = {
         GoldMerchant = {
-            { itemId = "alien_fruit", packSize = 1, price = 40, requiredWorld = "alien", ladder = "world_fruit" },
-            { itemId = "pirate_fruit", packSize = 1, price = 200, requiredWorld = "pirate", ladder = "world_fruit" },
+            { itemId = "alien_fruit", packSize = 1, price = 100, requiredWorld = "alien", ladder = "world_fruit" },
+            { itemId = "pirate_fruit", packSize = 1, price = 300, requiredWorld = "pirate", ladder = "world_fruit" },
             { itemId = "ninja_fruit", packSize = 1, price = 1000, requiredWorld = "ninja", ladder = "world_fruit" },
             { itemId = "city_fruit", packSize = 1, price = 2500, requiredWorld = "city", ladder = "world_fruit" }
         },
@@ -968,6 +968,8 @@ local Session = {
     questStatusText = "Đang chờ quét nhiệm vụ NPC...",
     questOverrideMobIds = nil,
     questOverrideElement = nil,
+    questCombatActive = false,
+    activeQuestDoneInRun = false,
     lastQuestTravelAt = 0,
     lastKnownArea = nil,
     lastSuccessfulTravelAt = 0,
@@ -976,6 +978,10 @@ local Session = {
     lastRecoveryStepBackAt = 0,
     unitHealthSummaryText = "Đang kiểm tra máu đội hình...",
     merchantStatusText = "Chọn thương nhân & món đồ muốn mua ở dưới",
+    knownRepaired = {},
+    upgradeTryCooldown = {},
+    activeMerchantDropdown = nil,
+    filterMerchantToggleUI = nil,
     matchSnapshot = nil,
     lastPinnedQuestId = nil,
     currentLobby = nil,
@@ -1069,27 +1075,140 @@ local function ReadFromRawTableByPath(rootTbl, path)
     return cur
 end
 
+-- Đánh giá mức độ dữ liệu thực của một bảng _table ứng viên (loại bỏ tuyệt đối DataSchema.template rỗng)
+local function ScoreCandidatePlayerDataTable(tbl)
+    if type(tbl) ~= "table" then return -1 end
+    -- DataSchema.template chứa các trường privatePaths (FirstJoinedAt, NextChampionIndex, PlaytestPlaythrough),
+    -- trong khi bảng _table của ClientStore đã loại bỏ toàn bộ schema.privatePaths khi khởi tạo!
+    if rawget(tbl, "FirstJoinedAt") ~= nil or rawget(tbl, "NextChampionIndex") ~= nil or rawget(tbl, "PlaytestPlaythrough") ~= nil then
+        return -1
+    end
+    local items = rawget(tbl, "Items")
+    local champs = rawget(tbl, "Champions")
+    local repaired = rawget(tbl, "Repaired")
+    local cleared = rawget(tbl, "ClearedBosses")
+    if type(items) ~= "table" or type(champs) ~= "table" or type(repaired) ~= "table" or type(cleared) ~= "table" then
+        return -1
+    end
+    local score = 1
+    if next(items) ~= nil then score = score + 20 end
+    if type(rawget(items, "gold")) == "number" then score = score + 20 end
+    if next(champs) ~= nil then score = score + 20 end
+    if next(repaired) ~= nil then score = score + 10 end
+    if next(cleared) ~= nil then score = score + 10 end
+    local stats = rawget(tbl, "Stats")
+    if type(stats) == "table" and (tonumber(rawget(stats, "TotalPlaytimeSeconds")) or 0) > 0 then
+        score = score + 15
+    end
+    return score
+end
+
+-- Cách 1 (O(1) Tức thì): Bắt trực tiếp ClientStore (u6) và ObservableTable (u5) từ kết nối OnClientEvent của ReplicatedStorage.__PlayerStore_LiveData1
+local function FindLivePlayerStoreFromConnections()
+    local getConns = (typeof(getconnections) == "function" and getconnections)
+        or (typeof(get_signal_connections) == "function" and get_signal_connections)
+        or nil
+    local getUpvals = (type(debug) == "table" and typeof(debug.getupvalues) == "function" and debug.getupvalues)
+        or (typeof(getupvalues) == "function" and getupvalues)
+        or nil
+    if not (getConns and getUpvals) then return nil end
+
+    local liveRemote = ReplicatedStorage:FindFirstChild("__PlayerStore_LiveData1")
+    if not liveRemote then
+        for _, child in ipairs(ReplicatedStorage:GetChildren()) do
+            if child:IsA("RemoteEvent") and string.sub(child.Name, 1, 14) == "__PlayerStore_" then
+                liveRemote = child
+                break
+            end
+        end
+    end
+    if not (liveRemote and liveRemote:IsA("RemoteEvent")) then return nil end
+
+    local okC, conns = pcall(getConns, liveRemote.OnClientEvent)
+    EnsureHighIdentity()
+    if not (okC and type(conns) == "table") then return nil end
+
+    local bestStore, bestTbl, bestScore = nil, nil, -1
+    for _, conn in ipairs(conns) do
+        local fn = type(conn) == "table" and (conn.Function or conn.Callback) or (typeof(conn) == "userdata" and pcall(function() return conn.Function end) and conn.Function) or nil
+        if typeof(fn) == "function" then
+            local okU, upvals = pcall(getUpvals, fn)
+            if okU and type(upvals) == "table" then
+                for _, uv in pairs(upvals) do
+                    if type(uv) == "table" then
+                        local obs = rawget(uv, "_observable")
+                        if rawget(uv, "_destroyed") == false and type(obs) == "table" and type(rawget(obs, "_table")) == "table" then
+                            local inner = rawget(obs, "_table")
+                            local sc = ScoreCandidatePlayerDataTable(inner)
+                            if rawget(uv, "_loaded") == true then sc = sc + 50 end
+                            if sc > bestScore then
+                                bestScore = sc
+                                bestStore = uv
+                                bestTbl = inner
+                            end
+                        elseif type(rawget(uv, "_table")) == "table" and type(rawget(uv, "_observerRoot")) == "table" then
+                            local inner = rawget(uv, "_table")
+                            local sc = ScoreCandidatePlayerDataTable(inner)
+                            if sc > bestScore then
+                                bestScore = sc
+                                bestTbl = inner
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    EnsureHighIdentity()
+    if bestStore then
+        cachedStore = bestStore
+    end
+    if bestTbl and bestScore > 0 then
+        cachedGcRawTable = bestTbl
+    end
+    return cachedStore
+end
+
 local function FindLivePlayerStoreInGc()
     if cachedStore then
         if rawget(cachedStore, "_destroyed") == true then
             cachedStore = nil
             cachedGcRawTable = nil
-        else
+        elseif rawget(cachedStore, "_loaded") == true then
+            local obs = rawget(cachedStore, "_observable")
+            if type(obs) == "table" and type(rawget(obs, "_table")) == "table" then
+                cachedGcRawTable = rawget(obs, "_table")
+            end
             return cachedStore
         end
     end
-    if cachedGcRawTable then return nil end
-    if os.clock() - lastGcScanAt < 5.0 then return nil end
+
+    -- Thử lấy tức thì O(1) qua getconnections(__PlayerStore_LiveData1.OnClientEvent) trước
+    local connStore = FindLivePlayerStoreFromConnections()
+    if connStore and rawget(connStore, "_loaded") == true then
+        return connStore
+    end
+
+    -- Nếu đã có cachedGcRawTable có dữ liệu thực (score > 1) thì không cần quét lại GC liên tục
+    if cachedGcRawTable and ScoreCandidatePlayerDataTable(cachedGcRawTable) > 1 then
+        return cachedStore
+    end
+
+    if os.clock() - lastGcScanAt < 3.0 then return cachedStore end
     lastGcScanAt = os.clock()
 
     local gcFn = (typeof(getgc) == "function" and getgc) or nil
-    if not gcFn then return nil end
+    if not gcFn then return cachedStore end
 
     local okGc, list = pcall(gcFn, true)
     EnsureHighIdentity()
-    if not (okGc and type(list) == "table") then return nil end
+    if not (okGc and type(list) == "table") then return cachedStore end
 
-    for _, obj in ipairs(list) do
+    local bestStore, bestStoreScore = nil, -1
+    local bestRawTbl, bestRawScore = nil, 1 -- Yêu cầu score > 1 (phải có dữ liệu thực, không nhận bảng template rỗng)
+
+    for i = 1, #list do
+        local obj = list[i]
         if type(obj) == "table" then
             -- 1. Tìm trực tiếp thực thể ClientStore đang hoạt động của LocalScript game
             local isLoadedFlag = rawget(obj, "_loaded")
@@ -1097,22 +1216,37 @@ local function FindLivePlayerStoreInGc()
             local observable = rawget(obj, "_observable")
             if isLoadedFlag == true and isDestroyedFlag == false and type(observable) == "table" then
                 local innerTbl = rawget(observable, "_table")
-                if type(innerTbl) == "table" and rawget(innerTbl, "Items") ~= nil and rawget(innerTbl, "Champions") ~= nil then
-                    cachedStore = obj
-                    cachedGcRawTable = innerTbl
-                    return obj
+                local sc = ScoreCandidatePlayerDataTable(innerTbl)
+                if sc >= 1 and sc > bestStoreScore then
+                    bestStoreScore = sc
+                    bestStore = obj
+                    bestRawTbl = innerTbl
+                    bestRawScore = sc
+                end
+            elseif type(rawget(obj, "_table")) == "table" and type(rawget(obj, "_observerRoot")) == "table" then
+                -- 2. Tìm qua thực thể ObservableTable đang hoạt động
+                local innerTbl = rawget(obj, "_table")
+                local sc = ScoreCandidatePlayerDataTable(innerTbl)
+                if sc > bestRawScore then
+                    bestRawScore = sc
+                    bestRawTbl = innerTbl
+                end
+            else
+                -- 3. Dự phòng: bắt trực tiếp bảng _table gốc của PlayerStore trong GC (loại trừ DataSchema.template)
+                local sc = ScoreCandidatePlayerDataTable(obj)
+                if sc > bestRawScore then
+                    bestRawScore = sc
+                    bestRawTbl = obj
                 end
             end
-            -- 2. Dự phòng: bắt trực tiếp bảng _table gốc của PlayerStore trong GC
-            if not cachedGcRawTable
-                and type(rawget(obj, "Items")) == "table"
-                and type(rawget(obj, "Champions")) == "table"
-                and type(rawget(obj, "Repaired")) == "table"
-                and type(rawget(obj, "ClearedBosses")) == "table"
-                and rawget(obj, "TutorialStep") ~= nil then
-                cachedGcRawTable = obj
-            end
         end
+    end
+
+    if bestStore then
+        cachedStore = bestStore
+    end
+    if bestRawTbl then
+        cachedGcRawTable = bestRawTbl
     end
     return cachedStore
 end
@@ -1122,32 +1256,43 @@ local function GetPlayerStore()
         if rawget(cachedStore, "_destroyed") == true then
             cachedStore = nil
             cachedGcRawTable = nil
-        else
+        elseif rawget(cachedStore, "_loaded") == true then
             return cachedStore
         end
     end
     local cds = GetGameModule("ClientDataService", { "Client", "services", "ClientDataService" })
     if type(cds) == "table" and typeof(cds.GetStore) == "function" then
         local ok, store = SafeCallGame(cds.GetStore)
-        if ok and store then
+        if ok and type(store) == "table" and rawget(store, "_loaded") == true and rawget(store, "_destroyed") ~= true then
             cachedStore = store
+            local obs = rawget(store, "_observable")
+            if type(obs) == "table" and type(rawget(obs, "_table")) == "table" then
+                cachedGcRawTable = rawget(obs, "_table")
+            end
             return store
         end
     end
     local gcStore = FindLivePlayerStoreInGc()
-    if gcStore then
+    if gcStore and rawget(gcStore, "_loaded") == true then
         return gcStore
     end
-    -- Nếu require(ClientDataService) chạy trong module cache riêng của Executor (chưa gọi Init),
-    -- chủ động gọi cds.Init() 1 lần để ClientStore tự kết nối __PlayerStore_LiveData1 và lấy snapshot
-    if not triedStoreInit and type(cds) == "table" and typeof(cds.Init) == "function" then
+    -- Dự phòng cuối cùng: chỉ gọi cds.Init() nếu chưa tìm thấyทั้ง cachedStore lẫn cachedGcRawTable,
+    -- và chỉ gán vào cachedStore SAU KHI store:waitUntilLoaded() trả về true (tuyệt đối không gán store rỗng chưa nạp!)
+    if not triedStoreInit and not cachedGcRawTable and type(cds) == "table" and typeof(cds.Init) == "function" then
         triedStoreInit = true
         task.spawn(function()
             SafeCallGame(cds.Init)
             if typeof(cds.GetStore) == "function" then
                 local okS, st = SafeCallGame(cds.GetStore)
-                if okS and st then
-                    cachedStore = st
+                if okS and type(st) == "table" then
+                    SafeCallGame(function() return st:waitUntilLoaded(10) end)
+                    if rawget(st, "_loaded") == true and rawget(st, "_destroyed") ~= true then
+                        cachedStore = st
+                        local obs = rawget(st, "_observable")
+                        if type(obs) == "table" and type(rawget(obs, "_table")) == "table" then
+                            cachedGcRawTable = rawget(obs, "_table")
+                        end
+                    end
                 end
             end
         end)
@@ -1160,9 +1305,17 @@ local function ReadStore(path, expectedType, readOnly)
     local gotVal = false
 
     local store = GetPlayerStore()
-    if store then
-        local okLoaded, isLoaded = SafeCallGame(function() return store:isLoaded() end)
-        if not (okLoaded and isLoaded == false) then
+    if store and rawget(store, "_loaded") == true and rawget(store, "_destroyed") ~= true then
+        local obs = rawget(store, "_observable")
+        local rawTbl = type(obs) == "table" and rawget(obs, "_table") or nil
+        if type(rawTbl) == "table" then
+            local v = ReadFromRawTableByPath(rawTbl, path)
+            if v ~= nil then
+                val = v
+                gotVal = true
+            end
+        end
+        if not gotVal then
             local okVal, v = SafeCallGame(function() return store:get(path) end)
             if okVal and v ~= nil then
                 val = v
@@ -1265,11 +1418,23 @@ local function FormatMerchantItemOption(itemId)
     return C.MerchantItemLabels[id] or id
 end
 
+local ReverseMerchantLabelToId = nil
 local function ResolveMerchantItemId(optionOrId)
     local raw = tostring(optionOrId or "")
-    local bracketed = raw:match("%[([^%]]+)%]$")
+    if raw == "" then return "" end
+    local bracketed = raw:match("%[([^%[%]]+)%]$")
     if bracketed and bracketed ~= "" then
         return bracketed
+    end
+    if not ReverseMerchantLabelToId then
+        ReverseMerchantLabelToId = {}
+        for id, lbl in pairs(C.MerchantItemLabels or {}) do
+            ReverseMerchantLabelToId[lbl] = id
+            ReverseMerchantLabelToId[id] = id
+        end
+    end
+    if ReverseMerchantLabelToId[raw] then
+        return ReverseMerchantLabelToId[raw]
     end
     return raw
 end
@@ -1299,11 +1464,13 @@ local function GetSelectedMerchantItemsKey(merchantId)
 end
 
 local function GetActiveSelectedMerchantItemsSet(merchantId)
-    local key = GetSelectedMerchantItemsKey(merchantId)
-    local list = Config[key]
+    local mid = tostring(merchantId or Config.SelectedMerchant or "GoldMerchant")
+    local key = GetSelectedMerchantItemsKey(mid)
     local set = {}
     local count = 0
-    if type(list) == "table" then
+
+    local function addFromList(list)
+        if type(list) ~= "table" then return end
         for _, entry in ipairs(list) do
             local cleanId = ResolveMerchantItemId(entry)
             if type(cleanId) == "string" and cleanId ~= "" and not set[cleanId] then
@@ -1312,18 +1479,138 @@ local function GetActiveSelectedMerchantItemsSet(merchantId)
             end
         end
     end
+
+    -- Ưu tiên đọc trực tiếp từ Dropdown đang hiển thị trên màn hình nếu cùng Thương Nhân
+    if mid == tostring(Config.SelectedMerchant or "GoldMerchant") and type(Session.activeMerchantDropdown) == "table" and typeof(Session.activeMerchantDropdown.Get) == "function" then
+        local okG, liveValues = pcall(Session.activeMerchantDropdown.Get, Session.activeMerchantDropdown)
+        if okG and type(liveValues) == "table" then
+            addFromList(liveValues)
+        end
+    end
+    if count == 0 then
+        addFromList(Config[key])
+    end
     return set, count
 end
 
 -- ============================================================================
 -- [6] HỆ THỐNG ECS & CHIẾN ĐẤU (LỌC MULTI QUÁI THEO WORLD, ENGAGE PACKS, ABILITIES, DROPS)
 -- ============================================================================
+local cachedLiveEcs = nil
+local lastEcsGcScanAt = 0
+
+local function FindLiveEcsContext()
+    if cachedLiveEcs and cachedLiveEcs.world and cachedLiveEcs.Components and cachedLiveEcs.Packs and cachedLiveEcs.replicator then
+        return cachedLiveEcs.world, cachedLiveEcs.Components, cachedLiveEcs.Packs, cachedLiveEcs.replicator, cachedLiveEcs.TeamUtils
+    end
+    if os.clock() - lastEcsGcScanAt < 3.0 and cachedLiveEcs then
+        return cachedLiveEcs.world, cachedLiveEcs.Components, cachedLiveEcs.Packs, cachedLiveEcs.replicator, cachedLiveEcs.TeamUtils
+    end
+    lastEcsGcScanAt = os.clock()
+
+    local liveWorld, liveComponents, livePacks, liveReplicator, liveTeamUtils = nil, nil, nil, nil, nil
+    local getConns = (typeof(getconnections) == "function" and getconnections)
+        or (typeof(get_signal_connections) == "function" and get_signal_connections)
+        or nil
+    local getUpvals = (type(debug) == "table" and typeof(debug.getupvalues) == "function" and debug.getupvalues)
+        or (typeof(getupvalues) == "function" and getupvalues)
+        or nil
+
+    -- 1. Bắt trực tiếp live replicator, world, Components từ kết nối Network.Entity_PlayAnimation.OnClientEvent (O(1))
+    if getConns and getUpvals then
+        local animRemote = GetNetworkRemote("Entity_PlayAnimation")
+        if animRemote and animRemote:IsA("RemoteEvent") then
+            local okC, conns = pcall(getConns, animRemote.OnClientEvent)
+            EnsureHighIdentity()
+            if okC and type(conns) == "table" then
+                for _, conn in ipairs(conns) do
+                    local fn = type(conn) == "table" and (conn.Function or conn.Callback) or (typeof(conn) == "userdata" and pcall(function() return conn.Function end) and conn.Function) or nil
+                    if typeof(fn) == "function" then
+                        local okU, upvals = pcall(getUpvals, fn)
+                        if okU and type(upvals) == "table" then
+                            for _, uv in pairs(upvals) do
+                                if type(uv) == "table" then
+                                    if typeof(rawget(uv, "get_server_entity")) == "function" and typeof(rawget(uv, "get_client_entity")) == "function" then
+                                        liveReplicator = uv
+                                    elseif typeof(rawget(uv, "query")) == "function" and typeof(rawget(uv, "contains")) == "function" then
+                                        liveWorld = uv
+                                    elseif rawget(uv, "Player") ~= nil and rawget(uv, "CurrentHealth") ~= nil and rawget(uv, "Pack") ~= nil then
+                                        liveComponents = uv
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- 2. Tìm live Packs & TeamUtils (và world/Components/replicator nếu thiếu) trong GC
+    local gcFn = (typeof(getgc) == "function" and getgc) or nil
+    if gcFn then
+        local okGc, list = pcall(gcFn, true)
+        EnsureHighIdentity()
+        if okGc and type(list) == "table" then
+            for i = 1, #list do
+                local obj = list[i]
+                if type(obj) == "table" then
+                    if typeof(rawget(obj, "activeSummaries")) == "function" and typeof(rawget(obj, "isLivePack")) == "function" then
+                        if getUpvals then
+                            local okU, uvs = pcall(getUpvals, rawget(obj, "isLivePack"))
+                            if okU and type(uvs) == "table" then
+                                local wCandidate, cCandidate = nil, nil
+                                for _, uv in pairs(uvs) do
+                                    if type(uv) == "table" then
+                                        if typeof(rawget(uv, "query")) == "function" and typeof(rawget(uv, "contains")) == "function" then
+                                            wCandidate = uv
+                                        elseif rawget(uv, "Player") ~= nil and rawget(uv, "Pack") ~= nil then
+                                            cCandidate = uv
+                                        end
+                                    end
+                                end
+                                if (liveWorld and wCandidate == liveWorld) or (not livePacks and wCandidate and cCandidate) then
+                                    livePacks = obj
+                                    if not liveWorld then liveWorld = wCandidate end
+                                    if not liveComponents then liveComponents = cCandidate end
+                                end
+                            end
+                        end
+                        if not livePacks then
+                            livePacks = obj
+                        end
+                    elseif not liveReplicator and typeof(rawget(obj, "get_server_entity")) == "function" and typeof(rawget(obj, "get_client_entity")) == "function" then
+                        liveReplicator = obj
+                    elseif not liveTeamUtils and typeof(rawget(obj, "areEntitiesHostile")) == "function" then
+                        liveTeamUtils = obj
+                    end
+                end
+            end
+        end
+    end
+    EnsureHighIdentity()
+
+    liveWorld = liveWorld or GetGameModule("ecs_world", { "Shared", "ecs", "world" })
+    liveComponents = liveComponents or GetGameModule("Components", { "Shared", "Components" })
+    livePacks = livePacks or GetGameModule("Packs", { "Shared", "combat", "Packs" })
+    liveReplicator = liveReplicator or GetGameModule("replicator", { "Client", "replicator" })
+    liveTeamUtils = liveTeamUtils or GetGameModule("TeamUtils", { "Shared", "utils", "TeamUtils" })
+
+    if liveWorld and liveComponents and livePacks and liveReplicator then
+        cachedLiveEcs = {
+            world = liveWorld,
+            Components = liveComponents,
+            Packs = livePacks,
+            replicator = liveReplicator,
+            TeamUtils = liveTeamUtils
+        }
+        return liveWorld, liveComponents, livePacks, liveReplicator, liveTeamUtils
+    end
+    return nil
+end
+
 local function GetEcsContext()
-    local world = GetGameModule("ecs_world", { "Shared", "ecs", "world" })
-    local Components = GetGameModule("Components", { "Shared", "Components" })
-    local Packs = GetGameModule("Packs", { "Shared", "combat", "Packs" })
-    local replicator = GetGameModule("replicator", { "Client", "replicator" })
-    local TeamUtils = GetGameModule("TeamUtils", { "Shared", "utils", "TeamUtils" })
+    local world, Components, Packs, replicator, TeamUtils = FindLiveEcsContext()
     if world and Components and Packs and replicator then
         return world, Components, Packs, replicator, TeamUtils
     end
@@ -1379,10 +1666,12 @@ local function EvaluateHostilePack(world, Components, TeamUtils, localEntity, lo
     end
 
     local isOverworld = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld") == "overworld"
-    local selectedSet, selectedCount = GetActiveSelectedMobsSet()
-    local useUserMobFilter = (not ignoreMobFilter) and isOverworld and Config.FilterBySelectedMobs and selectedCount > 0
     local questMobMap = isOverworld and Session.questOverrideMobIds or nil
     local questElem = isOverworld and Session.questOverrideElement or nil
+    local selectedSet, selectedCount = GetActiveSelectedMobsSet()
+    -- Khi đang làm nhiệm vụ NPC có mục tiêu quái cụ thể (questMobMap / questElem) hoặc đang ở trong Raid/Mission (ignoreMobFilter),
+    -- không để bộ lọc Multi Quái thường chặn mục tiêu nhiệm vụ!
+    local useUserMobFilter = (not ignoreMobFilter) and isOverworld and (not questMobMap) and (not questElem) and Config.FilterBySelectedMobs and selectedCount > 0
 
     local hasValidTarget = false
     local hasBoss = false
@@ -1812,15 +2101,17 @@ local function TryEngageNearestPack(forceTeleportInRun)
 
     local bestPack, bestSummary, bestDist, bestIsBoss, bestCharId = nil, nil, math.huge, false, nil
     local hasQuestOverride = isOverworld and (Session.questOverrideMobIds ~= nil or Session.questOverrideElement ~= nil)
-    local maxDist = (forceTeleportInRun and 1000)
-        or (hasQuestOverride and math.max(tonumber(Config.EngageMaxDist) or 150, 2500))
+    local isQuestAutoCombat = Config.AutoWorldNpcQuestLoop and (not isOverworld or Session.questCombatActive or hasQuestOverride)
+    local forceTele = (forceTeleportInRun == true) or isQuestAutoCombat
+    local maxDist = (forceTele and 5000)
+        or (hasQuestOverride and math.max(tonumber(Config.EngageMaxDist) or 150, 5000))
         or (tonumber(Config.EngageMaxDist) or 150)
     local myPos = hrp.Position
 
     -- Tìm theo bộ lọc (Multi Quái hoặc Mục Tiêu Quest)
     for packEntity, summary in pairs(summaries) do
         if typeof(summary.centroid) == "Vector3" then
-            local valid, isBoss, sampleChar = EvaluateHostilePack(world, Components, TeamUtils, localEntity, localTeam, summary, forceTeleportInRun == true)
+            local valid, isBoss, sampleChar = EvaluateHostilePack(world, Components, TeamUtils, localEntity, localTeam, summary, forceTele)
             if valid then
                 local dist = (summary.centroid - myPos).Magnitude
                 if dist <= maxDist then
@@ -1851,7 +2142,7 @@ local function TryEngageNearestPack(forceTeleportInRun)
         return false, "chưa đồng bộ serverEntity của pack"
     end
 
-    local shouldTeleport = (Config.TeleportToPack or forceTeleportInRun or (hasQuestOverride and bestDist > (tonumber(Config.EngageMaxDist) or 150)))
+    local shouldTeleport = (Config.TeleportToPack or forceTele or (hasQuestOverride and bestDist > (tonumber(Config.EngageMaxDist) or 150)))
     if shouldTeleport and bestDist > 18 then
         local dir = (myPos - bestSummary.centroid)
         local flatDir = Vector3.new(dir.X, 0, dir.Z)
@@ -1925,7 +2216,7 @@ local function ConnectNetworkEventListeners()
     local awardRemote = GetNetworkRemote("AwardDrops")
     if awardRemote and awardRemote:IsA("RemoteEvent") then
         TrackConnection(awardRemote.OnClientEvent:Connect(function(dropsPayload)
-            if not (Running and (Config.AutoCollectDrops or Config.AutoUniversalModeFarm) and type(dropsPayload) == "table") then
+            if not (Running and (Config.AutoCollectDrops or Config.AutoUniversalModeFarm or Config.AutoWorldNpcQuestLoop) and type(dropsPayload) == "table") then
                 return
             end
             task.spawn(function()
@@ -1945,7 +2236,7 @@ local function ConnectNetworkEventListeners()
         TrackConnection(talkOpenRemote.OnClientEvent:Connect(function(runId)
             if type(runId) == "string" and runId ~= "" then
                 Session.lastMissionTalkRunId = runId
-                if Running and (Config.AutoSkipDialogue or Config.AutoUniversalModeFarm) then
+                if Running and (Config.AutoSkipDialogue or Config.AutoUniversalModeFarm or Config.AutoWorldNpcQuestLoop) then
                     task.spawn(function()
                         task.wait(0.15)
                         FireRemote("MissionTalk_Ended", runId)
@@ -1959,7 +2250,7 @@ local function ConnectNetworkEventListeners()
     local transBegin = GetNetworkRemote("TeleportTransition_Begin")
     if transBegin and transBegin:IsA("RemoteEvent") then
         TrackConnection(transBegin.OnClientEvent:Connect(function(token)
-            if Running and (Config.AutoSkipTransitions or Config.AutoUniversalModeFarm) and type(token) == "string" then
+            if Running and (Config.AutoSkipTransitions or Config.AutoUniversalModeFarm or Config.AutoWorldNpcQuestLoop) and type(token) == "string" then
                 task.spawn(function()
                     task.wait(0.05)
                     FireRemote("TeleportTransition_Ready", token)
@@ -1971,7 +2262,7 @@ local function ConnectNetworkEventListeners()
     local transArrive = GetNetworkRemote("TeleportTransition_Arrive")
     if transArrive and transArrive:IsA("RemoteEvent") then
         TrackConnection(transArrive.OnClientEvent:Connect(function()
-            if Running and (Config.AutoSkipTransitions or Config.AutoUniversalModeFarm) then
+            if Running and (Config.AutoSkipTransitions or Config.AutoUniversalModeFarm or Config.AutoWorldNpcQuestLoop) then
                 task.spawn(function()
                     task.wait(0.05)
                     FireRemote("PlayerArrival_Presented")
@@ -2507,7 +2798,21 @@ local function EquipBestChampions(forceSend)
 
     if type(champions) == "table" and type(ranking) == "table" and typeof(ranking.pickBest) == "function" then
         local repaired = ReadStore("Repaired", "table", true) or {}
-        local baseSlots = 4 + (repaired.gold_team_slot and 1 or 0) + (repaired.gold_team_slot_2 and 1 or 0)
+        local claimedLines = ReadStore("ClaimedQuestlines", "table", true) or {}
+        -- Trong Balance.Progression: TEAM_BASE_SLOTS = 3, gold_team_slot (100K Gold) mở ô thứ 4, gold_team_slot_2 (100M Gold) mở ô thứ 5
+        local baseSlots = 3
+            + ((repaired.gold_team_slot or Session.knownRepaired.gold_team_slot) and 1 or 0)
+            + ((repaired.gold_team_slot_2 or Session.knownRepaired.gold_team_slot_2) and 1 or 0)
+        local equipSlotsCfg = GetGameModule("EquipSlotsConfig", { "Config", "EquipSlotsConfig" })
+        if type(equipSlotsCfg) == "table" and typeof(equipSlotsCfg.resolve) == "function" then
+            local okS, resolvedSlots = SafeCallGame(equipSlotsCfg.resolve, {
+                ClaimedQuestlines = claimedLines,
+                Repaired = repaired
+            })
+            if okS and type(resolvedSlots) == "number" and resolvedSlots >= baseSlots then
+                baseSlots = resolvedSlots
+            end
+        end
         local maxSlots = math.max(#equipped, baseSlots)
         local okPick, bestUids = SafeCallGame(ranking.pickBest, champions, maxSlots, equipped)
         if okPick and type(bestUids) == "table" and #bestUids > 0 then
@@ -3102,6 +3407,65 @@ local FlagToEnemyMap = {
     city_veil_3 = "veil_vessel_3"
 }
 
+-- Ánh xạ ID Boss sang World (theo Bosses.worldOfBoss trong QuestGo)
+local WorldBossEnemyToWorldMap = {
+    alien_boss = "alien",
+    marine_captain = "pirate",
+    snake_ninja = "ninja",
+    curse_king = "city"
+}
+
+local function ResolveWorldOfBossEnemy(enemyId)
+    if type(enemyId) ~= "string" or enemyId == "" then return nil end
+    local bossesCfg = GetGameModule("Bosses", { "Config", "Bosses" })
+    if type(bossesCfg) == "table" and typeof(bossesCfg.worldOfBoss) == "function" then
+        local okB, wid = SafeCallGame(bossesCfg.worldOfBoss, enemyId)
+        if okB and type(wid) == "string" and wid ~= "" then
+            return wid
+        end
+    end
+    return WorldBossEnemyToWorldMap[enemyId]
+end
+
+-- Tự động điều quân, dịch chuyển tới quái, tung kỹ năng, mở rương, chọn thẻ Raid & thoát về Sảnh khi đang ở trong Raid / Story Mission / World Boss của Nhiệm Vụ NPC
+local function StepQuestActiveRunCombat(gamemode, questDoneInRun)
+    ScanAndClaimEcsDrops()
+    ScanAndOpenChests(true)
+
+    local pausedForHeal, healReason = CheckTeamRecoveryPause()
+    if pausedForHeal then
+        Session.questStatusText = string.format("[%s - HỒI PHỤC] %s", string.upper(tostring(gamemode)), tostring(healReason))
+        return true
+    end
+
+    FireRemote("PlayerArrival_Presented")
+    if gamemode == "raid" then
+        if HandleRaidIntermission(true) then
+            Session.questStatusText = "[QUEST -> RAID] Đang chọn thẻ Buff & qua màn kế tiếp..."
+            return true
+        end
+    elseif gamemode == "defense" then
+        FireRemote("Defense_RequestNextWave")
+    elseif gamemode == "stage" then
+        FireRemote("StageScene_Continue")
+        if Session.lastMissionTalkRunId then
+            FireRemote("MissionTalk_Ended", Session.lastMissionTalkRunId)
+            Session.lastMissionTalkRunId = nil
+        end
+    end
+
+    -- Khi đã xong mục tiêu nhiệm vụ trong màn chơi (hoặc xong trận), ưu tiên mở rương rồi vote về "lobby" để trả nhiệm vụ NPC
+    local desiredVote = questDoneInRun and "lobby" or "retry"
+    VoteMatchResults(desiredVote, false)
+
+    local engaged, msg = TryEngageNearestPack(true)
+    FireAllEquippedAbilities()
+    if engaged then
+        Session.questStatusText = string.format("[QUEST -> %s] Đang Tele & Đánh: %s", string.upper(tostring(gamemode)), tostring(msg))
+    end
+    return true
+end
+
 -- Bộ điều phối Auto Quest của các NPC theo từng World (nhận -> di chuyển -> làm mục tiêu chưa xong -> trả quest)
 local function StepWorldNpcQuestEngine(allowEnteringRuns)
     local pausedForHeal, healReason = CheckTeamRecoveryPause()
@@ -3272,10 +3636,21 @@ local function StepWorldNpcQuestEngine(allowEnteringRuns)
         end
     end
 
+    local gamemode = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld")
+    local isOverworld = (gamemode == "overworld")
+
     if not (activeQuestId and activeQuestDef) then
+        Session.questCombatActive = false
+        Session.activeQuestDoneInRun = true
+        if not isOverworld then
+            StepQuestActiveRunCombat(gamemode, true)
+            return true
+        end
         Session.questStatusText = string.format("World [%s]: Đã hoàn tất mọi nhiệm vụ đã mở khóa!", tostring(Config.QuestWorldFilter))
         return false
     end
+
+    Session.activeQuestDoneInRun = false
 
     if Config.AutoPinActiveQuest and Session.lastPinnedQuestId ~= activeQuestId then
         Session.lastPinnedQuestId = activeQuestId
@@ -3287,8 +3662,10 @@ local function StepWorldNpcQuestEngine(allowEnteringRuns)
     Session.questStatusText = string.format("[%s] NPC %s -> %s (%s)",
         tostring(activeWorldId or "daily"), tostring(activeGiver or "Daily"), tostring(activeQuestDef.displayName or activeQuestId), tostring(kind))
 
-    local isOverworld = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld") == "overworld"
+    -- Nếu đang ở trong Raid / Story Mission / World Boss / Defense: tự động Tele tới quái, điều quân đánh, dùng kỹ năng, mở rương & vote kết quả
     if not isOverworld then
+        Session.questCombatActive = true
+        StepQuestActiveRunCombat(gamemode, false)
         return true
     end
 
@@ -3300,6 +3677,24 @@ local function StepWorldNpcQuestEngine(allowEnteringRuns)
         end
     end
 
+    -- Kiểm tra nếu nhiệm vụ có gắn Story Mission qua Quests.missionOf(activeQuestDef) và QuestLogic.holdsMission
+    if allowEnteringRuns and Config.AutoRunQuestMissionsAndBoss and typeof(questsCfg.missionOf) == "function" then
+        local okMId, heldMissionId = SafeCallGame(questsCfg.missionOf, activeQuestDef)
+        if okMId and type(heldMissionId) == "string" and heldMissionId ~= "" then
+            local holds = true
+            if type(questLogic) == "table" and typeof(questLogic.holdsMission) == "function" then
+                local okH, isHeld = SafeCallGame(questLogic.holdsMission, heldMissionId, questCtx)
+                if okH then holds = (isHeld == true) end
+            end
+            if holds then
+                Session.questCombatActive = true
+                StartSelectedStoryMission(heldMissionId)
+                return true
+            end
+        end
+    end
+
+    local needsWorldCombat = false
     local objectivesToRun = activeUnmetObj and { activeUnmetObj } or (type(activeQuestDef.objectives) == "table" and activeQuestDef.objectives or {})
     for _, o in ipairs(objectivesToRun) do
         if type(o) == "table" then
@@ -3312,11 +3707,13 @@ local function StepWorldNpcQuestEngine(allowEnteringRuns)
             elseif o.kind == "equip" and type(o.element) == "string" then
                 EnsureElementChampionEquipped(o.element)
             elseif o.kind == "flag" and type(o.flag) == "string" then
+                needsWorldCombat = true
                 local flagMob = FlagToEnemyMap[o.flag]
                 if flagMob then
                     Session.questOverrideMobIds = { [flagMob] = true }
                 end
             elseif o.kind == "collect" then
+                needsWorldCombat = true
                 local targetEnemy = o.enemyId or o.from
                 if type(targetEnemy) == "string" then
                     Session.questOverrideMobIds = { [targetEnemy] = true }
@@ -3324,28 +3721,42 @@ local function StepWorldNpcQuestEngine(allowEnteringRuns)
             elseif o.kind == "kill" or o.kind == "event" then
                 if o.kind == "event" and (o.event == "champion_fed" or o.event == "champion_level") then
                     AutoFeedEquippedChampions()
+                    needsWorldCombat = true
                 elseif o.kind == "event" and o.event == "summon" then
                     InvokeRemote("UnlockBanner", Config.SelectedBanner)
                     PullBannerOnce()
-                elseif o.kind == "event" and o.event == "weekly_challenge_win" and allowEnteringRuns and Config.AutoRunQuestMissionsAndBoss then
+                elseif o.kind == "event" and (o.event == "weekly_challenge_win" or o.event == "raid_win" or o.event == "raid_complete") and allowEnteringRuns and Config.AutoRunQuestMissionsAndBoss then
+                    Session.questCombatActive = true
                     FireRemote("Lobby_SetChosenChallenge", Config.SelectedRaidBase, Config.SelectedRaidTier)
                     task.wait(0.1)
                     FireRemote("Lobby_SetReady", true)
                     return true
-                elseif type(o.enemyId) == "string" then
-                    Session.questOverrideMobIds = { [o.enemyId] = true }
-                elseif type(o.target) == "string" and o.kind == "kill" then
-                    Session.questOverrideMobIds = { [o.target] = true }
-                elseif type(o.enemyElement) == "string" then
-                    Session.questOverrideElement = o.enemyElement
+                else
+                    local targetBossWorld = (o.kind == "kill" and type(o.enemyId) == "string") and ResolveWorldOfBossEnemy(o.enemyId) or nil
+                    if targetBossWorld and allowEnteringRuns and Config.AutoRunQuestMissionsAndBoss then
+                        Session.questCombatActive = true
+                        RepairSingle(targetBossWorld .. "_boss_portal")
+                        ChallengeSelectedBoss(targetBossWorld)
+                        return true
+                    end
+                    needsWorldCombat = true
+                    if type(o.enemyId) == "string" then
+                        Session.questOverrideMobIds = { [o.enemyId] = true }
+                    elseif type(o.target) == "string" and o.kind == "kill" then
+                        Session.questOverrideMobIds = { [o.target] = true }
+                    elseif type(o.enemyElement) == "string" then
+                        Session.questOverrideElement = o.enemyElement
+                    end
                 end
             elseif o.kind == "mission" and type(o.missionId) == "string" then
                 if allowEnteringRuns and Config.AutoRunQuestMissionsAndBoss then
+                    Session.questCombatActive = true
                     StartSelectedStoryMission(o.missionId)
                     return true
                 end
             elseif o.kind == "boss" and type(o.worldId) == "string" then
-                if allowEnteringRuns and Config.AutoRunQuestMissionsAndBoss and not clearedBosses[o.worldId] then
+                if allowEnteringRuns and Config.AutoRunQuestMissionsAndBoss then
+                    Session.questCombatActive = true
                     RepairSingle(o.worldId .. "_boss_portal")
                     ChallengeSelectedBoss(o.worldId)
                     return true
@@ -3354,7 +3765,12 @@ local function StepWorldNpcQuestEngine(allowEnteringRuns)
         end
     end
 
-    TryEngageNearestPack(false)
+    Session.questCombatActive = needsWorldCombat
+    -- Tự động Tele tới bãi quái nhiệm vụ trong World và điều quân đánh + tung kỹ năng
+    local engaged = TryEngageNearestPack(true)
+    if engaged then
+        FireAllEquippedAbilities()
+    end
     return true
 end
 
@@ -3727,14 +4143,120 @@ local function GetCurrencyBalance(currencyId, itemsTbl)
     return nil
 end
 
+local WorldProgressionRank = {
+    alien = 1,
+    pirate = 2,
+    ninja = 3,
+    city = 4,
+    ant = 5
+}
+
+local PrevWorldByWorld = {
+    pirate = "alien",
+    ninja = "pirate",
+    city = "ninja",
+    ant = "city"
+}
+
+local function IsWorldUnlockedSmart(requiredWorld, clearedBosses, hasValidCleared, catalog, offer, overworldCfg)
+    if type(requiredWorld) ~= "string" or requiredWorld == "" or requiredWorld == "alien" then
+        return true
+    end
+    local prevWorld = PrevWorldByWorld[requiredWorld]
+    if type(clearedBosses) == "table" then
+        if prevWorld and clearedBosses[prevWorld] == true then
+            return true
+        end
+        if clearedBosses[requiredWorld] == true then
+            return true
+        end
+    end
+    -- Nếu người chơi đang đứng ở một World >= requiredWorld hoặc đã mở khóa Banner của World đó thì chắc chắn đã mở khóa
+    local reqRank = WorldProgressionRank[requiredWorld] or 99
+    local curArea = GetCurrentOverworldArea()
+    local curRank = WorldProgressionRank[curArea] or 0
+    if curRank >= reqRank then
+        return true
+    end
+    local unlockedBanners = ReadStore("UnlockedBanners", "table", true)
+    if type(unlockedBanners) == "table" then
+        for bannerId, isUnl in pairs(unlockedBanners) do
+            if isUnl == true and (WorldProgressionRank[bannerId] or 0) >= reqRank then
+                return true
+            end
+        end
+    end
+    if hasValidCleared then
+        if type(catalog) == "table" and typeof(catalog.isOfferUnlocked) == "function" and type(offer) == "table" then
+            local okU, isU = SafeCallGame(catalog.isOfferUnlocked, offer, clearedBosses)
+            if okU then return isU == true end
+        end
+        if type(overworldCfg) == "table" and typeof(overworldCfg.isWorldUnlocked) == "function" then
+            local okW, isW = SafeCallGame(overworldCfg.isWorldUnlocked, clearedBosses, requiredWorld)
+            if okW then return isW == true end
+        end
+        return false
+    end
+    -- Khi chưa đọc được bảng ClearedBosses thực tế: không tự chặn oan ở client
+    return true
+end
+
+local function OpenMerchantWindowOnScreen(merchantId)
+    local target = tostring(merchantId or Config.SelectedMerchant or "GoldMerchant")
+    -- 1. Thử tìm trực tiếp thực thể ClientMerchantService hoặc ClientUIService đang sống trong GC của LocalScript game
+    local gcFn = (typeof(getgc) == "function" and getgc) or nil
+    if gcFn then
+        local okGc, list = pcall(gcFn, true)
+        EnsureHighIdentity()
+        if okGc and type(list) == "table" then
+            for i = 1, #list do
+                local obj = list[i]
+                if type(obj) == "table" then
+                    if rawget(obj, "WindowId") == "Merchant" and typeof(rawget(obj, "OpenWindow")) == "function" then
+                        local okOpen = SafeCallGame(obj.OpenWindow, target)
+                        if okOpen then
+                            Notify("Thương Nhân", "Đã mở giao diện: " .. target, 2)
+                            return true
+                        end
+                    end
+                end
+            end
+            for i = 1, #list do
+                local obj = list[i]
+                if type(obj) == "table" and typeof(rawget(obj, "Navigate")) == "function" and typeof(rawget(obj, "RegisterWindow")) == "function" then
+                    local okNav = SafeCallGame(obj.Navigate, {
+                        window = "Merchant",
+                        intent = { merchant_id = target }
+                    })
+                    if okNav then
+                        Notify("Thương Nhân", "Đã mở giao diện: " .. target, 2)
+                        return true
+                    end
+                end
+            end
+        end
+    end
+
+    local mSvc = GetGameModule("ClientMerchantService", { "Client", "services", "ClientMerchantService" })
+    if type(mSvc) == "table" and typeof(mSvc.OpenWindow) == "function" then
+        SafeCallGame(mSvc.OpenWindow, target)
+    end
+    local uiSvc = GetGameModule("ClientUIService", { "Client", "services", "ClientUIService" })
+    if type(uiSvc) == "table" and typeof(uiSvc.Navigate) == "function" then
+        SafeCallGame(uiSvc.Navigate, {
+            window = "Merchant",
+            intent = { merchant_id = target }
+        })
+    end
+    return true
+end
+
 local function BuyAllMerchantOffers(merchantId, forceAttempt)
     local target = tostring(merchantId or Config.SelectedMerchant or "GoldMerchant")
     local selectedSet, selectedCount = GetActiveSelectedMerchantItemsSet(target)
-    local useItemFilter = Config.FilterMerchantBySelectedItems or (selectedCount > 0)
-    if useItemFilter and selectedCount == 0 then
-        Session.merchantStatusText = string.format("[%s] Đang bật lọc Multi nhưng chưa tích chọn món đồ nào!", target)
-        return 0, Session.merchantStatusText
-    end
+    -- Chỉ áp dụng bộ lọc Multi khi người chơi có tích chọn ít nhất 1 món VÀ đang bật lọc (hoặc có chọn món trong hộp Multi).
+    -- Nếu người chơi bật "Chỉ Mua Các Món Đồ Đã Chọn" nhưng hộp Multi đang để trống (0 món), tự động mua toàn bộ kệ thay vì đứng im!
+    local useItemFilter = (selectedCount > 0) and (Config.FilterMerchantBySelectedItems ~= false)
 
     -- Đảm bảo đã gửi MeetNpc cho NPC thương nhân tương ứng
     local merchantNpcMap = {
@@ -3764,20 +4286,36 @@ local function BuyAllMerchantOffers(merchantId, forceAttempt)
     local repairedMap = type(rawRepaired) == "table" and rawRepaired or {}
     local weeklyBuys = type(rawWeekly) == "table" and rawWeekly or {}
 
+    for repId, isRep in pairs(repairedMap) do
+        if isRep == true then
+            Session.knownRepaired[repId] = true
+        end
+    end
+
     local currencyId = C.MerchantCurrencyMap[target] or "gold"
     local knownBalance = GetCurrencyBalance(currencyId, rawItems)
-    local hasStoreData = (knownBalance ~= nil) or (rawItems ~= nil) or (rawRepaired ~= nil)
+    local knownGold = GetCurrencyBalance("gold", rawItems)
+    local hasValidBalance = (type(knownBalance) == "number")
+    local hasValidGold = (type(knownGold) == "number")
+    local hasValidCleared = (type(rawCleared) == "table" and next(rawCleared) ~= nil)
 
     local now = Workspace:GetServerTimeNow()
     local bought = 0
     local boughtNames = {}
     local failReasons = {}
 
-    -- 1. Mua các gói Upgrades thuộc Thương Nhân này (ví dụ GoldMerchant: gold_team_slot / Ô Đội, gold_team_slot_2, auto_abilities, storage_1..3)
+    -- 1. Mua các gói Upgrades thuộc Thương Nhân này:
+    --    - auto_abilities: 1,000 Gold (1K Gold)
+    --    - gold_team_slot (Ô Đội I +1 Tướng -> 4 tướng): 100,000 Gold (100K Gold)
+    --    - gold_team_slot_2 (Ô Đội II +1 Tướng -> 5 tướng, yêu cầu đã mua gold_team_slot): 100,000,000 Gold (100M Gold)
+    --    - storage_1 (1K), storage_2 (100K), storage_3 (10M): released = false trong PlaceVersion 4
     local merchantUpgrades = C.MerchantUpgradesByMerchant[target] or {}
     for _, upgradeId in ipairs(merchantUpgrades) do
-        local upgradeAllowed = (not useItemFilter) or (selectedSet[upgradeId] == true)
-        if upgradeAllowed and not repairedMap[upgradeId] then
+        local isSelectedUpgrade = (selectedSet[upgradeId] == true)
+        local upgradeAllowed = (not useItemFilter) or isSelectedUpgrade
+        local alreadyOwned = (repairedMap[upgradeId] == true) or (Session.knownRepaired[upgradeId] == true)
+
+        if upgradeAllowed and not alreadyOwned then
             local uDef = C.MerchantUpgradeDefsFallback[upgradeId]
             if type(repairsCfg) == "table" and typeof(repairsCfg.get) == "function" then
                 local okU, runtimeDef = SafeCallGame(repairsCfg.get, upgradeId)
@@ -3789,45 +4327,69 @@ local function BuyAllMerchantOffers(merchantId, forceAttempt)
             local upgradePrice = (type(uDef) == "table" and tonumber(uDef.price)) or 0
             local reqId = type(uDef) == "table" and uDef.requires or nil
             local isReleased = not (type(uDef) == "table" and uDef.released == false)
+            local prereqMet = (not reqId) or (repairedMap[reqId] == true) or (Session.knownRepaired[reqId] == true)
 
             local canTryUpgrade = false
-            if forceAttempt and selectedSet[upgradeId] == true then
-                -- Khi người chơi tích chọn đích danh món này và bấm nút Mua Ngay: luôn gửi lệnh lên server để thử
+            if not isReleased then
+                if isSelectedUpgrade then
+                    failReasons[#failReasons + 1] = string.format("%s: chưa mở bán trong phiên bản game này", upgradeId)
+                end
+            elseif forceAttempt and isSelectedUpgrade then
+                -- Người chơi tích chọn trực tiếp gói Upgrade này và bấm nút Mua Ngay: luôn gửi lệnh lên server
                 canTryUpgrade = true
-            elseif not hasStoreData then
-                -- Khi chưa đọc được PlayerStore: chỉ thử nếu đã mở bán (isReleased)
-                canTryUpgrade = isReleased
-            else
-                local prereqMet = (not reqId) or (repairedMap[reqId] == true)
-                local curGold = GetCurrencyBalance("gold", items) or 0
-                if isReleased and prereqMet and curGold >= upgradePrice then
-                    canTryUpgrade = true
-                elseif selectedSet[upgradeId] == true then
-                    if not isReleased then
-                        failReasons[#failReasons + 1] = upgradeId .. ": chưa mở bán trong bản này"
-                    elseif not prereqMet then
-                        failReasons[#failReasons + 1] = upgradeId .. ": cần mua " .. tostring(reqId) .. " trước"
-                    elseif curGold < upgradePrice then
-                        failReasons[#failReasons + 1] = string.format("%s: cần %s Gold (có %s)", upgradeId, FormatNumber(upgradePrice), FormatNumber(curGold))
+            elseif not hasValidGold then
+                -- Khi chưa đọc được số Vàng từ PlayerStore: thử gửi với cooldown 12s để không spam server
+                if prereqMet then
+                    local lastTry = Session.upgradeTryCooldown[upgradeId] or 0
+                    if forceAttempt or (os.clock() - lastTry >= 12.0) then
+                        canTryUpgrade = true
                     end
+                elseif isSelectedUpgrade then
+                    failReasons[#failReasons + 1] = string.format("%s: cần mua %s trước", upgradeId, tostring(reqId))
+                end
+            else
+                if not prereqMet then
+                    if isSelectedUpgrade then
+                        local reqPrice = (C.MerchantUpgradeDefsFallback[reqId] and C.MerchantUpgradeDefsFallback[reqId].price) or 100000
+                        failReasons[#failReasons + 1] = string.format("%s: cần mua %s (%s Gold) trước", upgradeId, tostring(reqId), FormatNumber(reqPrice))
+                    end
+                elseif knownGold < upgradePrice then
+                    if isSelectedUpgrade or forceAttempt then
+                        failReasons[#failReasons + 1] = string.format("%s: cần %s Gold (hiện có %s Gold)", upgradeId, FormatNumber(upgradePrice), FormatNumber(knownGold))
+                    end
+                else
+                    canTryUpgrade = true
                 end
             end
 
             if canTryUpgrade then
+                Session.upgradeTryCooldown[upgradeId] = os.clock()
                 local okRep, errRep = RepairSingle(upgradeId)
                 if okRep then
                     bought = bought + 1
                     boughtNames[#boughtNames + 1] = upgradeId
                     repairedMap[upgradeId] = true
-                    if knownBalance and currencyId == "gold" and upgradePrice > 0 then
-                        knownBalance = math.max(0, knownBalance - upgradePrice)
-                        items.gold = knownBalance
+                    Session.knownRepaired[upgradeId] = true
+                    if hasValidGold and upgradePrice > 0 then
+                        knownGold = math.max(0, knownGold - upgradePrice)
+                        items.gold = knownGold
+                        if currencyId == "gold" then
+                            knownBalance = knownGold
+                        end
                     end
-                    Notify("Thương Nhân [Upgrades]", "Đã mua nâng cấp: " .. tostring(upgradeId), 3)
-                elseif selectedSet[upgradeId] == true and errRep then
-                    failReasons[#failReasons + 1] = upgradeId .. ": " .. tostring(errRep)
+                    Notify("Thương Nhân [Upgrades]", string.format("Đã mua nâng cấp: %s (%s Gold)", tostring(upgradeId), FormatNumber(upgradePrice)), 4)
+                else
+                    local errStr = tostring(errRep or "")
+                    if string.find(string.lower(errStr), "already") then
+                        repairedMap[upgradeId] = true
+                        Session.knownRepaired[upgradeId] = true
+                    elseif isSelectedUpgrade or forceAttempt then
+                        failReasons[#failReasons + 1] = string.format("%s (giá %s Gold): %s", upgradeId, FormatNumber(upgradePrice), errStr)
+                    end
                 end
             end
+        elseif upgradeAllowed and alreadyOwned and isSelectedUpgrade and forceAttempt then
+            failReasons[#failReasons + 1] = upgradeId .. ": đã sở hữu"
         end
     end
 
@@ -3838,6 +4400,12 @@ local function BuyAllMerchantOffers(merchantId, forceAttempt)
         if okM and type(mDef) == "table" and type(mDef.offers) == "table" then
             merchantDef = mDef
         end
+    end
+
+    -- Đồng bộ thời gian đóng cửa trực tiếp từ Workspace attribute (ví dụ ShardMerchantClosesAt) giống ClientMerchantHoursService
+    if merchantDef and type(merchantDef.liveClosesAtKey) == "string" and type(catalog) == "table" and typeof(catalog.setLiveClosesAt) == "function" then
+        local liveAttr = Workspace:GetAttribute(merchantDef.liveClosesAtKey)
+        SafeCallGame(catalog.setLiveClosesAt, merchantDef, type(liveAttr) == "number" and liveAttr or nil)
     end
 
     if merchantDef and type(catalog) == "table" and typeof(catalog.isOpen) == "function" then
@@ -3856,6 +4424,7 @@ local function BuyAllMerchantOffers(merchantId, forceAttempt)
     if merchantDef and type(merchantDef.currencyId) == "string" then
         currencyId = merchantDef.currencyId
         knownBalance = GetCurrencyBalance(currencyId, items)
+        hasValidBalance = (type(knownBalance) == "number")
     end
 
     local curWeek = 0
@@ -3866,7 +4435,7 @@ local function BuyAllMerchantOffers(merchantId, forceAttempt)
 
     -- Xác định thứ tự duyệt offerIndex:
     -- Với GoldMerchant (ladder = "world_fruit"), khi không lọc món cụ thể thì duyệt từ trái cây World cao nhất xuống thấp nhất
-    -- để ưu tiên mua Trái Cây cấp cao nhất đang bán (ví dụ ninja_fruit / Trái Nguyên Tố) thay vì mua trái cấp 1 alien_fruit.
+    -- để ưu tiên mua Trái Cây cấp cao nhất đang mở bán (ví dụ ninja_fruit / Trái Nguyên Tố 1,000 Gold ở World 3)
     local offerIndices = {}
     if target == "GoldMerchant" and not useItemFilter then
         for idx = #offersList, 1, -1 do
@@ -3883,7 +4452,8 @@ local function BuyAllMerchantOffers(merchantId, forceAttempt)
         local offer = offersList[offerIndex]
         if type(offer) == "table" and type(offer.itemId) == "string" then
             local itemId = offer.itemId
-            local itemAllowed = (not useItemFilter) or (selectedSet[itemId] == true)
+            local isSelectedItem = (selectedSet[itemId] == true)
+            local itemAllowed = (not useItemFilter) or isSelectedItem
             if not useItemFilter and offer.ladder and boughtLadder[offer.ladder] then
                 itemAllowed = false
             end
@@ -3891,20 +4461,10 @@ local function BuyAllMerchantOffers(merchantId, forceAttempt)
             if itemAllowed then
                 local packSize = tonumber(offer.packSize) or 1
                 local unitPackPrice = tonumber(offer.price) or 1
-                local unlocked = true
-
-                if hasStoreData and rawCleared ~= nil then
-                    if type(catalog) == "table" and typeof(catalog.isOfferUnlocked) == "function" then
-                        local okU, isU = SafeCallGame(catalog.isOfferUnlocked, offer, clearedBosses)
-                        if okU then unlocked = (isU == true) end
-                    elseif type(offer.requiredWorld) == "string" and type(overworldCfg) == "table" and typeof(overworldCfg.isWorldUnlocked) == "function" then
-                        local okW, isW = SafeCallGame(overworldCfg.isWorldUnlocked, clearedBosses, offer.requiredWorld)
-                        if okW then unlocked = (isW == true) end
-                    end
-                end
+                local unlocked = IsWorldUnlockedSmart(offer.requiredWorld, clearedBosses, hasValidCleared, catalog, offer, overworldCfg)
 
                 local left = nil
-                if hasStoreData and type(catalog) == "table" and typeof(catalog.weeklyLeft) == "function" and typeof(catalog.weeklyKey) == "function" then
+                if type(rawWeekly) == "table" and type(catalog) == "table" and typeof(catalog.weeklyLeft) == "function" and typeof(catalog.weeklyKey) == "function" then
                     local okK, wKey = SafeCallGame(catalog.weeklyKey, target, itemId)
                     if okK and type(wKey) == "string" then
                         local okL, rem = SafeCallGame(catalog.weeklyLeft, offer, weeklyBuys[wKey], curWeek)
@@ -3913,33 +4473,31 @@ local function BuyAllMerchantOffers(merchantId, forceAttempt)
                 end
 
                 local canAttemptOffer = false
-                if forceAttempt and selectedSet[itemId] == true then
-                    -- Khi người chơi chọn đích danh món này và bấm nút Mua Ngay: luôn thử gọi remote
+                if forceAttempt and isSelectedItem then
+                    -- Khi người chơi chọn đích danh món này và bấm nút Mua Ngay: luôn gửi lệnh lên server
                     canAttemptOffer = true
-                elseif not hasStoreData or knownBalance == nil then
-                    -- Khi chưa đọc được số dư từ PlayerStore: thử gửi trực tiếp 1 gói lên server
-                    canAttemptOffer = true
-                else
-                    if not unlocked then
-                        if selectedSet[itemId] == true then
-                            failReasons[#failReasons + 1] = itemId .. ": chưa mở khóa World " .. tostring(offer.requiredWorld or "?")
-                        end
-                    elseif left ~= nil and left < packSize then
-                        if selectedSet[itemId] == true then
-                            failReasons[#failReasons + 1] = itemId .. ": đã hết lượt mua tuần này"
-                        end
-                    elseif knownBalance < unitPackPrice then
-                        if selectedSet[itemId] == true then
-                            failReasons[#failReasons + 1] = string.format("%s: cần %s %s (có %s)", itemId, FormatNumber(unitPackPrice), currencyId, FormatNumber(knownBalance))
-                        end
-                    else
-                        canAttemptOffer = true
+                elseif not unlocked then
+                    if isSelectedItem then
+                        failReasons[#failReasons + 1] = string.format("%s: chưa mở khóa World %s", itemId, tostring(offer.requiredWorld or "?"))
                     end
+                elseif left ~= nil and left < packSize then
+                    if isSelectedItem or forceAttempt then
+                        failReasons[#failReasons + 1] = itemId .. ": đã hết lượt mua tuần này"
+                    end
+                elseif not hasValidBalance then
+                    -- Khi chưa đọc được số dư từ PlayerStore: thử gửi trực tiếp lên server
+                    canAttemptOffer = true
+                elseif knownBalance < unitPackPrice then
+                    if isSelectedItem or forceAttempt then
+                        failReasons[#failReasons + 1] = string.format("%s: cần %s %s (hiện có %s)", itemId, FormatNumber(unitPackPrice), currencyId, FormatNumber(knownBalance))
+                    end
+                else
+                    canAttemptOffer = true
                 end
 
                 if canAttemptOffer then
                     local buyQty = packSize
-                    if Config.MerchantBuyMaxPacks and knownBalance and knownBalance >= unitPackPrice then
+                    if Config.MerchantBuyMaxPacks and hasValidBalance and knownBalance >= unitPackPrice then
                         if type(catalog) == "table" and typeof(catalog.getMaxAffordableQuantity) == "function" then
                             local okQ, maxQ = SafeCallGame(catalog.getMaxAffordableQuantity, offer, knownBalance, left)
                             if okQ and type(maxQ) == "number" and maxQ >= packSize then
@@ -3968,24 +4526,28 @@ local function BuyAllMerchantOffers(merchantId, forceAttempt)
                             boughtLadder[offer.ladder] = true
                         end
                         local totalCost = unitPackPrice * (buyQty / packSize)
-                        if knownBalance then
+                        if hasValidBalance then
                             knownBalance = math.max(0, knownBalance - totalCost)
                             items[currencyId] = knownBalance
+                            if currencyId == "gold" then
+                                knownGold = knownBalance
+                            end
                         end
-                    elseif selectedSet[itemId] == true then
-                        failReasons[#failReasons + 1] = itemId .. ": server từ chối (kiểm tra tiền / mở khóa World)"
+                    elseif isSelectedItem or (forceAttempt and unlocked) then
+                        failReasons[#failReasons + 1] = string.format("%s (giá %s %s): server từ chối", itemId, FormatNumber(unitPackPrice), currencyId)
                     end
                 end
             end
         end
     end
 
+    local balanceTag = hasValidBalance and string.format(" | Số dư %s: %s", currencyId, FormatNumber(knownBalance)) or ""
     if bought > 0 then
-        Session.merchantStatusText = string.format("[%s] Đã mua %d mục: %s", target, bought, table.concat(boughtNames, ", "))
+        Session.merchantStatusText = string.format("[%s] Đã mua %d mục: %s%s", target, bought, table.concat(boughtNames, ", "), balanceTag)
     elseif #failReasons > 0 then
         Session.merchantStatusText = string.format("[%s] Chưa mua được: %s", target, table.concat(failReasons, " | "))
     else
-        Session.merchantStatusText = string.format("[%s] Chưa có mục nào đủ tiền hoặc đủ điều kiện mua", target)
+        Session.merchantStatusText = string.format("[%s] Chưa có mục nào đủ tiền hoặc đủ điều kiện mua%s", target, balanceTag)
     end
     return bought, Session.merchantStatusText
 end
@@ -4824,6 +5386,8 @@ local function BuildQuestTab()
         if not on then
             Session.questOverrideMobIds = nil
             Session.questOverrideElement = nil
+            Session.questCombatActive = false
+            Session.activeQuestDoneInRun = false
         end
     end)
     AddToggle(secWorldQuest, "Bao Gồm Cả Nhiệm Vụ Hàng Ngày (Daily Quests)", "AutoDailyQuests")
@@ -4887,10 +5451,14 @@ local function BuildQuestTab()
     end)
 
     local initialMerchantItems = GetMerchantItemList(Config.SelectedMerchant)
+    local initialFormattedSelection = GetFormattedSavedMerchantSelection(Config.SelectedMerchant)
+    if #initialFormattedSelection > 0 then
+        Config.FilterMerchantBySelectedItems = true
+    end
     merchantItemMultiDropdown = secMerchant:AddDropdown(
         "2. Chọn Multi Món Đồ Của Thương Nhân Đang Chọn",
         initialMerchantItems,
-        GetFormattedSavedMerchantSelection(Config.SelectedMerchant),
+        initialFormattedSelection,
         true,
         function(selectedList)
             if not uiFullyLoaded then
@@ -4898,18 +5466,30 @@ local function BuildQuestTab()
                 return
             end
             local key = GetSelectedMerchantItemsKey(Config.SelectedMerchant)
+            local copy = {}
             if type(selectedList) == "table" then
-                local copy = {}
                 for _, item in ipairs(selectedList) do
-                    copy[#copy + 1] = ResolveMerchantItemId(item)
+                    local cleanId = ResolveMerchantItemId(item)
+                    if type(cleanId) == "string" and cleanId ~= "" then
+                        copy[#copy + 1] = cleanId
+                    end
                 end
                 Config[key] = copy
+            end
+            -- Tự động bật/tắt công tắc Lọc Multi khi người chơi tích chọn hoặc bấm Xóa trong hộp chọn Multi
+            local shouldFilter = (#copy > 0)
+            if Config.FilterMerchantBySelectedItems ~= shouldFilter then
+                Config.FilterMerchantBySelectedItems = shouldFilter
+                if Session.filterMerchantToggleUI and typeof(Session.filterMerchantToggleUI.Set) == "function" then
+                    pcall(Session.filterMerchantToggleUI.Set, Session.filterMerchantToggleUI, shouldFilter)
+                end
             end
             TriggerSave()
         end
     )
+    Session.activeMerchantDropdown = merchantItemMultiDropdown
 
-    AddToggle(secMerchant, "Chỉ Mua Các Món Đồ Đã Chọn Ở Trên (Lọc Multi)", "FilterMerchantBySelectedItems")
+    Session.filterMerchantToggleUI = AddToggle(secMerchant, "Chỉ Mua Các Món Đồ Đã Chọn Ở Trên (Lọc Multi)", "FilterMerchantBySelectedItems")
     AddToggle(secMerchant, "Auto Mua Vật Phẩm & Upgrades Thương Nhân", "AutoBuyMerchant")
     AddToggle(secMerchant, "Mua Tối Đa Số Gói Đủ Tiền (Max Affordable Packs)", "MerchantBuyMaxPacks")
     secMerchant:AddButton("Mua Các Món Đã Chọn (Hoặc Toàn Bộ) Ngay", function()
@@ -4920,12 +5500,7 @@ local function BuildQuestTab()
     end)
     secMerchant:AddButton("Mở Cửa Sổ Thương Nhân Đang Chọn Trên Màn Hình", function()
         task.spawn(function()
-            local mSvc = GetGameModule("ClientMerchantService", { "Client", "services", "ClientMerchantService" })
-            if type(mSvc) == "table" and typeof(mSvc.OpenWindow) == "function" then
-                SafeCallGame(mSvc.OpenWindow, Config.SelectedMerchant)
-            else
-                OpenGameWindow("Merchant")
-            end
+            OpenMerchantWindowOnScreen(Config.SelectedMerchant)
         end)
     end)
 
@@ -5019,10 +5594,23 @@ end
 -- ============================================================================
 ConnectNetworkEventListeners()
 
--- Vòng lặp điều quân, Auto Farm Đa Chế Độ, nhặt drop & giữ WalkSpeed tùy chỉnh
+-- Vòng lặp điều quân, Auto Farm Đa Chế Độ, Auto Đánh & Tele Cho Nhiệm Vụ NPC, nhặt drop & giữ WalkSpeed tùy chỉnh
 StartLoop(0.35, function()
     if Config.AutoUniversalModeFarm then
         StepUniversalModeFarm()
+    elseif Config.AutoWorldNpcQuestLoop then
+        local gamemode = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld")
+        if gamemode ~= "overworld" then
+            StepQuestActiveRunCombat(gamemode, Session.activeQuestDoneInRun)
+        else
+            if Session.questCombatActive or Config.AutoEngage then
+                local engaged = TryEngageNearestPack(true)
+                if engaged then
+                    FireAllEquippedAbilities()
+                end
+            end
+            ScanAndClaimEcsDrops()
+        end
     else
         if Config.AutoEngage then
             TryEngageNearestPack(false)
