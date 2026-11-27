@@ -1,10 +1,10 @@
--- HelmHub | Anime Champions X v1.5
+-- HelmHub | Anime Champions X v1.6
 -- Place: Anime Champions X [RUNS] (PlaceId 79755351995296, UniverseId 10778033190)
 -- Nguồn dữ liệu: dump Anime Champions X PlaceVersion 4. Hằng số dự phòng nằm trong bảng Known và được đọc lại
 -- từ ReplicatedStorage.Config.* / ReplicatedStorage.Shared.* lúc chạy qua SafeRequire + EnsureHighIdentity.
--- Trạng thái: đã xử lý triệt để lỗi hạ thread identity (lacking capability Plugin), tối ưu hiệu năng (Remote/ECS/Store/UI Cache) và nâng cấp toàn diện theo Logic/Rules của game.
+-- Trạng thái: đã xử lý triệt để lỗi hạ thread identity (lacking capability Plugin), giới hạn 200 biến local của Luau, tối ưu hiệu năng (Remote/ECS/Store/UI Cache) và nâng cấp toàn diện theo Logic/Rules của game.
 
-local SCRIPT_VERSION = "1.5"
+local SCRIPT_VERSION = "1.6"
 
 local env = (typeof(getgenv) == "function" and getgenv()) or _G
 if env.__HelmACXCleanup and typeof(env.__HelmACXCleanup) == "function" then
@@ -897,52 +897,53 @@ local Config = {
 local accountName = tostring((LocalPlayer and LocalPlayer.Name) or (LocalPlayer and tostring(LocalPlayer.UserId)) or "default"):gsub("[^%w_%-]", "_")
 if accountName == "" then accountName = "default" end
 local GAME_FOLDER_NAME = "Anime Champions X"
-local CONFIG_DIR = "HelmHub/" .. GAME_FOLDER_NAME
-local CONFIG_FILE = string.format("%s/config_%s.json", CONFIG_DIR, accountName)
-
-local function WriteJson(path, data)
-    pcall(function()
-        if not writefile then return end
-        if isfolder and makefolder then
-            if not isfolder("HelmHub") then makefolder("HelmHub") end
-            if not isfolder(CONFIG_DIR) then makefolder(CONFIG_DIR) end
-        end
-        writefile(path, HttpService:JSONEncode(data))
-    end)
-end
-
-local function ReadJson(path)
-    local ok, data = pcall(function()
-        if not (isfile and readfile and isfile(path)) then return nil end
-        return HttpService:JSONDecode(readfile(path))
-    end)
-    if ok and type(data) == "table" then
-        return data
-    end
-    return nil
-end
-
 local uiFullyLoaded = false
-local saveScheduled = false
-
-local function SaveConfig()
-    saveScheduled = false
-    WriteJson(CONFIG_FILE, Config)
-end
-
-local function TriggerSave()
-    if not uiFullyLoaded then return end
-    if saveScheduled then return end
-    saveScheduled = true
-    task.delay(0.35, function()
-        if saveScheduled and Running then
-            SaveConfig()
-        end
-    end)
-end
+local SaveConfig, TriggerSave
 
 do
-    for k, v in pairs(ReadJson(CONFIG_FILE) or {}) do
+    local configDir = "HelmHub/" .. GAME_FOLDER_NAME
+    local configFile = string.format("%s/config_%s.json", configDir, accountName)
+    local saveScheduled = false
+
+    local function WriteJson(path, data)
+        pcall(function()
+            if not writefile then return end
+            if isfolder and makefolder then
+                if not isfolder("HelmHub") then makefolder("HelmHub") end
+                if not isfolder(configDir) then makefolder(configDir) end
+            end
+            writefile(path, HttpService:JSONEncode(data))
+        end)
+    end
+
+    local function ReadJson(path)
+        local ok, data = pcall(function()
+            if not (isfile and readfile and isfile(path)) then return nil end
+            return HttpService:JSONDecode(readfile(path))
+        end)
+        if ok and type(data) == "table" then
+            return data
+        end
+        return nil
+    end
+
+    SaveConfig = function()
+        saveScheduled = false
+        WriteJson(configFile, Config)
+    end
+
+    TriggerSave = function()
+        if not uiFullyLoaded then return end
+        if saveScheduled then return end
+        saveScheduled = true
+        task.delay(0.35, function()
+            if saveScheduled and Running then
+                SaveConfig()
+            end
+        end)
+    end
+
+    for k, v in pairs(ReadJson(configFile) or {}) do
         if Config[k] ~= nil and type(Config[k]) == type(v) then
             Config[k] = v
         end
@@ -957,6 +958,23 @@ local Session = {
     openedChests = {},
     metNpcs = {},
     esp = { npc = {}, chest = {}, enemy = {} },
+    espFolder = nil,
+    labels = {},
+    lastLabelTexts = {},
+    networkFolder = nil,
+    networkRemoteCache = {},
+    reverseMerchantLabelToId = nil,
+    cachedLiveEcs = nil,
+    lastEcsGcScanAt = 0,
+    cachedLocalEntity = nil,
+    characterElementCache = {},
+    championRarityCache = {},
+    lastHealthEvalAt = 0,
+    healthCache = { downCount = 0, totalUnits = 0, minHpPct = 1.0, avgHpPct = 1.0, foundUnits = 0 },
+    lastUniversalQueueAt = 0,
+    lastAbilityAt = 0,
+    lastSessionCachePruneAt = os.clock(),
+    lastAutoAttackSyncAt = 0,
     rerollingTrait = false,
     rerollingStats = false,
     lastPackEntity = nil,
@@ -1023,20 +1041,17 @@ local function TeleportCharacterTo(posOrCf)
     return true
 end
 
-local NetworkFolder = nil
-local NetworkRemoteCache = {}
-
 local function GetNetworkRemote(name)
-    local cached = NetworkRemoteCache[name]
+    local cached = Session.networkRemoteCache[name]
     if cached and cached.Parent then
         return cached
     end
-    if not (NetworkFolder and NetworkFolder.Parent) then
-        NetworkFolder = ReplicatedStorage:FindFirstChild("Network")
+    if not (Session.networkFolder and Session.networkFolder.Parent) then
+        Session.networkFolder = ReplicatedStorage:FindFirstChild("Network")
     end
-    local remote = NetworkFolder and NetworkFolder:FindFirstChild(name) or nil
+    local remote = Session.networkFolder and Session.networkFolder:FindFirstChild(name) or nil
     if remote then
-        NetworkRemoteCache[name] = remote
+        Session.networkRemoteCache[name] = remote
     end
     return remote
 end
@@ -1058,322 +1073,313 @@ local function InvokeRemote(name, ...)
     return table.unpack(packed, 1, packed.n)
 end
 
-local cachedStore = nil
-local cachedGcRawTable = nil
-local triedStoreInit = false
-local lastGcScanAt = 0
-local PathPartsCache = {}
+local GetPlayerStore, ReadStore
+do
+    local cachedStore = nil
+    local cachedGcRawTable = nil
+    local triedStoreInit = false
+    local lastGcScanAt = 0
+    local PathPartsCache = {}
 
-local function ReadFromRawTableByPath(rootTbl, path)
-    if type(rootTbl) ~= "table" then return nil end
-    if type(path) ~= "string" or path == "" then return rootTbl end
-    local parts = PathPartsCache[path]
-    if not parts then
-        parts = string.split(path, "/")
-        PathPartsCache[path] = parts
-    end
-    local cur = rootTbl
-    for i = 1, #parts do
-        if type(cur) ~= "table" then
-            return nil
+    local function ReadFromRawTableByPath(rootTbl, path)
+        if type(rootTbl) ~= "table" then return nil end
+        if type(path) ~= "string" or path == "" then return rootTbl end
+        local parts = PathPartsCache[path]
+        if not parts then
+            parts = string.split(path, "/")
+            PathPartsCache[path] = parts
         end
-        cur = cur[parts[i]]
+        local cur = rootTbl
+        for i = 1, #parts do
+            if type(cur) ~= "table" then
+                return nil
+            end
+            cur = cur[parts[i]]
+        end
+        return cur
     end
-    return cur
-end
 
--- Đánh giá mức độ dữ liệu thực của một bảng _table ứng viên (loại bỏ tuyệt đối DataSchema.template rỗng)
-local function ScoreCandidatePlayerDataTable(tbl)
-    if type(tbl) ~= "table" then return -1 end
-    -- DataSchema.template chứa các trường privatePaths (FirstJoinedAt, NextChampionIndex, PlaytestPlaythrough),
-    -- trong khi bảng _table của ClientStore đã loại bỏ toàn bộ schema.privatePaths khi khởi tạo!
-    if rawget(tbl, "FirstJoinedAt") ~= nil or rawget(tbl, "NextChampionIndex") ~= nil or rawget(tbl, "PlaytestPlaythrough") ~= nil then
-        return -1
+    local function ScoreCandidatePlayerDataTable(tbl)
+        if type(tbl) ~= "table" then return -1 end
+        if rawget(tbl, "FirstJoinedAt") ~= nil or rawget(tbl, "NextChampionIndex") ~= nil or rawget(tbl, "PlaytestPlaythrough") ~= nil then
+            return -1
+        end
+        local items = rawget(tbl, "Items")
+        local champs = rawget(tbl, "Champions")
+        local repaired = rawget(tbl, "Repaired")
+        local cleared = rawget(tbl, "ClearedBosses")
+        if type(items) ~= "table" or type(champs) ~= "table" or type(repaired) ~= "table" or type(cleared) ~= "table" then
+            return -1
+        end
+        local score = 1
+        if next(items) ~= nil then score = score + 20 end
+        if type(rawget(items, "gold")) == "number" then score = score + 20 end
+        if next(champs) ~= nil then score = score + 20 end
+        if next(repaired) ~= nil then score = score + 10 end
+        if next(cleared) ~= nil then score = score + 10 end
+        local stats = rawget(tbl, "Stats")
+        if type(stats) == "table" and (tonumber(rawget(stats, "TotalPlaytimeSeconds")) or 0) > 0 then
+            score = score + 15
+        end
+        return score
     end
-    local items = rawget(tbl, "Items")
-    local champs = rawget(tbl, "Champions")
-    local repaired = rawget(tbl, "Repaired")
-    local cleared = rawget(tbl, "ClearedBosses")
-    if type(items) ~= "table" or type(champs) ~= "table" or type(repaired) ~= "table" or type(cleared) ~= "table" then
-        return -1
-    end
-    local score = 1
-    if next(items) ~= nil then score = score + 20 end
-    if type(rawget(items, "gold")) == "number" then score = score + 20 end
-    if next(champs) ~= nil then score = score + 20 end
-    if next(repaired) ~= nil then score = score + 10 end
-    if next(cleared) ~= nil then score = score + 10 end
-    local stats = rawget(tbl, "Stats")
-    if type(stats) == "table" and (tonumber(rawget(stats, "TotalPlaytimeSeconds")) or 0) > 0 then
-        score = score + 15
-    end
-    return score
-end
 
--- Cách 1 (O(1) Tức thì): Bắt trực tiếp ClientStore (u6) và ObservableTable (u5) từ kết nối OnClientEvent của ReplicatedStorage.__PlayerStore_LiveData1
-local function FindLivePlayerStoreFromConnections()
-    local getConns = (typeof(getconnections) == "function" and getconnections)
-        or (typeof(get_signal_connections) == "function" and get_signal_connections)
-        or nil
-    local getUpvals = (type(debug) == "table" and typeof(debug.getupvalues) == "function" and debug.getupvalues)
-        or (typeof(getupvalues) == "function" and getupvalues)
-        or nil
-    if not (getConns and getUpvals) then return nil end
+    local function FindLivePlayerStoreFromConnections()
+        local getConns = (typeof(getconnections) == "function" and getconnections)
+            or (typeof(get_signal_connections) == "function" and get_signal_connections)
+            or nil
+        local getUpvals = (type(debug) == "table" and typeof(debug.getupvalues) == "function" and debug.getupvalues)
+            or (typeof(getupvalues) == "function" and getupvalues)
+            or nil
+        if not (getConns and getUpvals) then return nil end
 
-    local liveRemote = ReplicatedStorage:FindFirstChild("__PlayerStore_LiveData1")
-    if not liveRemote then
-        for _, child in ipairs(ReplicatedStorage:GetChildren()) do
-            if child:IsA("RemoteEvent") and string.sub(child.Name, 1, 14) == "__PlayerStore_" then
-                liveRemote = child
-                break
+        local liveRemote = ReplicatedStorage:FindFirstChild("__PlayerStore_LiveData1")
+        if not liveRemote then
+            for _, child in ipairs(ReplicatedStorage:GetChildren()) do
+                if child:IsA("RemoteEvent") and string.sub(child.Name, 1, 14) == "__PlayerStore_" then
+                    liveRemote = child
+                    break
+                end
             end
         end
-    end
-    if not (liveRemote and liveRemote:IsA("RemoteEvent")) then return nil end
+        if not (liveRemote and liveRemote:IsA("RemoteEvent")) then return nil end
 
-    local okC, conns = pcall(getConns, liveRemote.OnClientEvent)
-    EnsureHighIdentity()
-    if not (okC and type(conns) == "table") then return nil end
+        local okC, conns = pcall(getConns, liveRemote.OnClientEvent)
+        EnsureHighIdentity()
+        if not (okC and type(conns) == "table") then return nil end
 
-    local bestStore, bestTbl, bestScore = nil, nil, -1
-    for _, conn in ipairs(conns) do
-        local fn = type(conn) == "table" and (conn.Function or conn.Callback) or (typeof(conn) == "userdata" and pcall(function() return conn.Function end) and conn.Function) or nil
-        if typeof(fn) == "function" then
-            local okU, upvals = pcall(getUpvals, fn)
-            if okU and type(upvals) == "table" then
-                for _, uv in pairs(upvals) do
-                    if type(uv) == "table" then
-                        local obs = rawget(uv, "_observable")
-                        if rawget(uv, "_destroyed") == false and type(obs) == "table" and type(rawget(obs, "_table")) == "table" then
-                            local inner = rawget(obs, "_table")
-                            local sc = ScoreCandidatePlayerDataTable(inner)
-                            if rawget(uv, "_loaded") == true then sc = sc + 50 end
-                            if sc > bestScore then
-                                bestScore = sc
-                                bestStore = uv
-                                bestTbl = inner
-                            end
-                        elseif type(rawget(uv, "_table")) == "table" and type(rawget(uv, "_observerRoot")) == "table" then
-                            local inner = rawget(uv, "_table")
-                            local sc = ScoreCandidatePlayerDataTable(inner)
-                            if sc > bestScore then
-                                bestScore = sc
-                                bestTbl = inner
+        local bestStore, bestTbl, bestScore = nil, nil, -1
+        for _, conn in ipairs(conns) do
+            local fn = type(conn) == "table" and (conn.Function or conn.Callback) or (typeof(conn) == "userdata" and pcall(function() return conn.Function end) and conn.Function) or nil
+            if typeof(fn) == "function" then
+                local okU, upvals = pcall(getUpvals, fn)
+                if okU and type(upvals) == "table" then
+                    for _, uv in pairs(upvals) do
+                        if type(uv) == "table" then
+                            local obs = rawget(uv, "_observable")
+                            if rawget(uv, "_destroyed") == false and type(obs) == "table" and type(rawget(obs, "_table")) == "table" then
+                                local inner = rawget(obs, "_table")
+                                local sc = ScoreCandidatePlayerDataTable(inner)
+                                if rawget(uv, "_loaded") == true then sc = sc + 50 end
+                                if sc > bestScore then
+                                    bestScore = sc
+                                    bestStore = uv
+                                    bestTbl = inner
+                                end
+                            elseif type(rawget(uv, "_table")) == "table" and type(rawget(uv, "_observerRoot")) == "table" then
+                                local inner = rawget(uv, "_table")
+                                local sc = ScoreCandidatePlayerDataTable(inner)
+                                if sc > bestScore then
+                                    bestScore = sc
+                                    bestTbl = inner
+                                end
                             end
                         end
                     end
                 end
             end
         end
-    end
-    EnsureHighIdentity()
-    if bestStore then
-        cachedStore = bestStore
-    end
-    if bestTbl and bestScore > 0 then
-        cachedGcRawTable = bestTbl
-    end
-    return cachedStore
-end
-
-local function FindLivePlayerStoreInGc()
-    if cachedStore then
-        if rawget(cachedStore, "_destroyed") == true then
-            cachedStore = nil
-            cachedGcRawTable = nil
-        elseif rawget(cachedStore, "_loaded") == true then
-            local obs = rawget(cachedStore, "_observable")
-            if type(obs) == "table" and type(rawget(obs, "_table")) == "table" then
-                cachedGcRawTable = rawget(obs, "_table")
-            end
-            return cachedStore
+        EnsureHighIdentity()
+        if bestStore then
+            cachedStore = bestStore
         end
-    end
-
-    -- Thử lấy tức thì O(1) qua getconnections(__PlayerStore_LiveData1.OnClientEvent) trước
-    local connStore = FindLivePlayerStoreFromConnections()
-    if connStore and rawget(connStore, "_loaded") == true then
-        return connStore
-    end
-
-    -- Nếu đã có cachedGcRawTable có dữ liệu thực (score > 1) thì không cần quét lại GC liên tục
-    if cachedGcRawTable and ScoreCandidatePlayerDataTable(cachedGcRawTable) > 1 then
+        if bestTbl and bestScore > 0 then
+            cachedGcRawTable = bestTbl
+        end
         return cachedStore
     end
 
-    if os.clock() - lastGcScanAt < 3.0 then return cachedStore end
-    lastGcScanAt = os.clock()
-
-    local gcFn = (typeof(getgc) == "function" and getgc) or nil
-    if not gcFn then return cachedStore end
-
-    local okGc, list = pcall(gcFn, true)
-    EnsureHighIdentity()
-    if not (okGc and type(list) == "table") then return cachedStore end
-
-    local bestStore, bestStoreScore = nil, -1
-    local bestRawTbl, bestRawScore = nil, 1 -- Yêu cầu score > 1 (phải có dữ liệu thực, không nhận bảng template rỗng)
-
-    for i = 1, #list do
-        local obj = list[i]
-        if type(obj) == "table" then
-            -- 1. Tìm trực tiếp thực thể ClientStore đang hoạt động của LocalScript game
-            local isLoadedFlag = rawget(obj, "_loaded")
-            local isDestroyedFlag = rawget(obj, "_destroyed")
-            local observable = rawget(obj, "_observable")
-            if isLoadedFlag == true and isDestroyedFlag == false and type(observable) == "table" then
-                local innerTbl = rawget(observable, "_table")
-                local sc = ScoreCandidatePlayerDataTable(innerTbl)
-                if sc >= 1 and sc > bestStoreScore then
-                    bestStoreScore = sc
-                    bestStore = obj
-                    bestRawTbl = innerTbl
-                    bestRawScore = sc
+    local function FindLivePlayerStoreInGc()
+        if cachedStore then
+            if rawget(cachedStore, "_destroyed") == true then
+                cachedStore = nil
+                cachedGcRawTable = nil
+            elseif rawget(cachedStore, "_loaded") == true then
+                local obs = rawget(cachedStore, "_observable")
+                if type(obs) == "table" and type(rawget(obs, "_table")) == "table" then
+                    cachedGcRawTable = rawget(obs, "_table")
                 end
-            elseif type(rawget(obj, "_table")) == "table" and type(rawget(obj, "_observerRoot")) == "table" then
-                -- 2. Tìm qua thực thể ObservableTable đang hoạt động
-                local innerTbl = rawget(obj, "_table")
-                local sc = ScoreCandidatePlayerDataTable(innerTbl)
-                if sc > bestRawScore then
-                    bestRawScore = sc
-                    bestRawTbl = innerTbl
-                end
-            else
-                -- 3. Dự phòng: bắt trực tiếp bảng _table gốc của PlayerStore trong GC (loại trừ DataSchema.template)
-                local sc = ScoreCandidatePlayerDataTable(obj)
-                if sc > bestRawScore then
-                    bestRawScore = sc
-                    bestRawTbl = obj
-                end
+                return cachedStore
             end
         end
-    end
 
-    if bestStore then
-        cachedStore = bestStore
-    end
-    if bestRawTbl then
-        cachedGcRawTable = bestRawTbl
-    end
-    return cachedStore
-end
+        local connStore = FindLivePlayerStoreFromConnections()
+        if connStore and rawget(connStore, "_loaded") == true then
+            return connStore
+        end
 
-local function GetPlayerStore()
-    if cachedStore then
-        if rawget(cachedStore, "_destroyed") == true then
-            cachedStore = nil
-            cachedGcRawTable = nil
-        elseif rawget(cachedStore, "_loaded") == true then
+        if cachedGcRawTable and ScoreCandidatePlayerDataTable(cachedGcRawTable) > 1 then
             return cachedStore
         end
-    end
-    local cds = GetGameModule("ClientDataService", { "Client", "services", "ClientDataService" })
-    if type(cds) == "table" and typeof(cds.GetStore) == "function" then
-        local ok, store = SafeCallGame(cds.GetStore)
-        if ok and type(store) == "table" and rawget(store, "_loaded") == true and rawget(store, "_destroyed") ~= true then
-            cachedStore = store
-            local obs = rawget(store, "_observable")
-            if type(obs) == "table" and type(rawget(obs, "_table")) == "table" then
-                cachedGcRawTable = rawget(obs, "_table")
-            end
-            return store
-        end
-    end
-    local gcStore = FindLivePlayerStoreInGc()
-    if gcStore and rawget(gcStore, "_loaded") == true then
-        return gcStore
-    end
-    -- Dự phòng cuối cùng: chỉ gọi cds.Init() nếu chưa tìm thấyทั้ง cachedStore lẫn cachedGcRawTable,
-    -- và chỉ gán vào cachedStore SAU KHI store:waitUntilLoaded() trả về true (tuyệt đối không gán store rỗng chưa nạp!)
-    if not triedStoreInit and not cachedGcRawTable and type(cds) == "table" and typeof(cds.Init) == "function" then
-        triedStoreInit = true
-        task.spawn(function()
-            SafeCallGame(cds.Init)
-            if typeof(cds.GetStore) == "function" then
-                local okS, st = SafeCallGame(cds.GetStore)
-                if okS and type(st) == "table" then
-                    SafeCallGame(function() return st:waitUntilLoaded(10) end)
-                    if rawget(st, "_loaded") == true and rawget(st, "_destroyed") ~= true then
-                        cachedStore = st
-                        local obs = rawget(st, "_observable")
-                        if type(obs) == "table" and type(rawget(obs, "_table")) == "table" then
-                            cachedGcRawTable = rawget(obs, "_table")
-                        end
+
+        if os.clock() - lastGcScanAt < 3.0 then return cachedStore end
+        lastGcScanAt = os.clock()
+
+        local gcFn = (typeof(getgc) == "function" and getgc) or nil
+        if not gcFn then return cachedStore end
+
+        local okGc, list = pcall(gcFn, true)
+        EnsureHighIdentity()
+        if not (okGc and type(list) == "table") then return cachedStore end
+
+        local bestStore, bestStoreScore = nil, -1
+        local bestRawTbl, bestRawScore = nil, 1
+
+        for i = 1, #list do
+            local obj = list[i]
+            if type(obj) == "table" then
+                local isLoadedFlag = rawget(obj, "_loaded")
+                local isDestroyedFlag = rawget(obj, "_destroyed")
+                local observable = rawget(obj, "_observable")
+                if isLoadedFlag == true and isDestroyedFlag == false and type(observable) == "table" then
+                    local innerTbl = rawget(observable, "_table")
+                    local sc = ScoreCandidatePlayerDataTable(innerTbl)
+                    if sc >= 1 and sc > bestStoreScore then
+                        bestStoreScore = sc
+                        bestStore = obj
+                        bestRawTbl = innerTbl
+                        bestRawScore = sc
+                    end
+                elseif type(rawget(obj, "_table")) == "table" and type(rawget(obj, "_observerRoot")) == "table" then
+                    local innerTbl = rawget(obj, "_table")
+                    local sc = ScoreCandidatePlayerDataTable(innerTbl)
+                    if sc > bestRawScore then
+                        bestRawScore = sc
+                        bestRawTbl = innerTbl
+                    end
+                else
+                    local sc = ScoreCandidatePlayerDataTable(obj)
+                    if sc > bestRawScore then
+                        bestRawScore = sc
+                        bestRawTbl = obj
                     end
                 end
             end
-        end)
+        end
+
+        if bestStore then
+            cachedStore = bestStore
+        end
+        if bestRawTbl then
+            cachedGcRawTable = bestRawTbl
+        end
+        return cachedStore
     end
-    return cachedStore
-end
 
-local function ReadStore(path, expectedType, readOnly)
-    local val = nil
-    local gotVal = false
+    GetPlayerStore = function()
+        if cachedStore then
+            if rawget(cachedStore, "_destroyed") == true then
+                cachedStore = nil
+                cachedGcRawTable = nil
+            elseif rawget(cachedStore, "_loaded") == true then
+                return cachedStore
+            end
+        end
+        local cds = GetGameModule("ClientDataService", { "Client", "services", "ClientDataService" })
+        if type(cds) == "table" and typeof(cds.GetStore) == "function" then
+            local ok, store = SafeCallGame(cds.GetStore)
+            if ok and type(store) == "table" and rawget(store, "_loaded") == true and rawget(store, "_destroyed") ~= true then
+                cachedStore = store
+                local obs = rawget(store, "_observable")
+                if type(obs) == "table" and type(rawget(obs, "_table")) == "table" then
+                    cachedGcRawTable = rawget(obs, "_table")
+                end
+                return store
+            end
+        end
+        local gcStore = FindLivePlayerStoreInGc()
+        if gcStore and rawget(gcStore, "_loaded") == true then
+            return gcStore
+        end
+        if not triedStoreInit and not cachedGcRawTable and type(cds) == "table" and typeof(cds.Init) == "function" then
+            triedStoreInit = true
+            task.spawn(function()
+                SafeCallGame(cds.Init)
+                if typeof(cds.GetStore) == "function" then
+                    local okS, st = SafeCallGame(cds.GetStore)
+                    if okS and type(st) == "table" then
+                        SafeCallGame(function() return st:waitUntilLoaded(10) end)
+                        if rawget(st, "_loaded") == true and rawget(st, "_destroyed") ~= true then
+                            cachedStore = st
+                            local obs = rawget(st, "_observable")
+                            if type(obs) == "table" and type(rawget(obs, "_table")) == "table" then
+                                cachedGcRawTable = rawget(obs, "_table")
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+        return cachedStore
+    end
 
-    local store = GetPlayerStore()
-    if store and rawget(store, "_loaded") == true and rawget(store, "_destroyed") ~= true then
-        local obs = rawget(store, "_observable")
-        local rawTbl = type(obs) == "table" and rawget(obs, "_table") or nil
-        if type(rawTbl) == "table" then
-            local v = ReadFromRawTableByPath(rawTbl, path)
+    ReadStore = function(path, expectedType, readOnly)
+        local val = nil
+        local gotVal = false
+
+        local store = GetPlayerStore()
+        if store and rawget(store, "_loaded") == true and rawget(store, "_destroyed") ~= true then
+            local obs = rawget(store, "_observable")
+            local rawTbl = type(obs) == "table" and rawget(obs, "_table") or nil
+            if type(rawTbl) == "table" then
+                local v = ReadFromRawTableByPath(rawTbl, path)
+                if v ~= nil then
+                    val = v
+                    gotVal = true
+                end
+            end
+            if not gotVal then
+                local okVal, v = SafeCallGame(function() return store:get(path) end)
+                if okVal and v ~= nil then
+                    val = v
+                    gotVal = true
+                end
+            end
+        end
+
+        if not gotVal and cachedGcRawTable then
+            local v = ReadFromRawTableByPath(cachedGcRawTable, path)
             if v ~= nil then
                 val = v
                 gotVal = true
             end
         end
+
         if not gotVal then
-            local okVal, v = SafeCallGame(function() return store:get(path) end)
-            if okVal and v ~= nil then
-                val = v
-                gotVal = true
-            end
-        end
-    end
-
-    if not gotVal and cachedGcRawTable then
-        local v = ReadFromRawTableByPath(cachedGcRawTable, path)
-        if v ~= nil then
-            val = v
-            gotVal = true
-        end
-    end
-
-    if not gotVal then
-        local cds = GetGameModule("ClientDataService", { "Client", "services", "ClientDataService" })
-        local fusion = GetGameModule("Fusion", { "Packages", "Fusion" })
-        if type(cds) == "table" and type(cds.Fusion) == "table" and type(fusion) == "table" and typeof(fusion.peek) == "function" then
-            local itemKey = type(path) == "string" and path:match("^Items/(.+)$") or nil
-            if itemKey and type(cds.Fusion.ItemCounts) == "table" and cds.Fusion.ItemCounts[itemKey] then
-                local okP, v = SafeCallGame(fusion.peek, cds.Fusion.ItemCounts[itemKey])
-                if okP and v ~= nil then
-                    val = v
-                    gotVal = true
-                end
-            elseif cds.Fusion[path] then
-                local okP, v = SafeCallGame(fusion.peek, cds.Fusion[path])
-                if okP and v ~= nil then
-                    val = v
-                    gotVal = true
+            local cds = GetGameModule("ClientDataService", { "Client", "services", "ClientDataService" })
+            local fusion = GetGameModule("Fusion", { "Packages", "Fusion" })
+            if type(cds) == "table" and type(cds.Fusion) == "table" and type(fusion) == "table" and typeof(fusion.peek) == "function" then
+                local itemKey = type(path) == "string" and path:match("^Items/(.+)$") or nil
+                if itemKey and type(cds.Fusion.ItemCounts) == "table" and cds.Fusion.ItemCounts[itemKey] then
+                    local okP, v = SafeCallGame(fusion.peek, cds.Fusion.ItemCounts[itemKey])
+                    if okP and v ~= nil then
+                        val = v
+                        gotVal = true
+                    end
+                elseif cds.Fusion[path] then
+                    local okP, v = SafeCallGame(fusion.peek, cds.Fusion[path])
+                    if okP and v ~= nil then
+                        val = v
+                        gotVal = true
+                    end
                 end
             end
         end
-    end
 
-    if not gotVal or val == nil then
-        return nil
-    end
-    if expectedType and type(val) ~= expectedType then
-        return nil
-    end
-    -- Clone bảng khi caller có thể chỉnh sửa (readOnly ~= true) để tránh lỗi "attempt to modify a readonly table"
-    if not readOnly and type(val) == "table" then
-        local okClone, cloned = pcall(table.clone, val)
-        if okClone and type(cloned) == "table" then
-            return cloned
+        if not gotVal or val == nil then
+            return nil
         end
+        if expectedType and type(val) ~= expectedType then
+            return nil
+        end
+        if not readOnly and type(val) == "table" then
+            local okClone, cloned = pcall(table.clone, val)
+            if okClone and type(cloned) == "table" then
+                return cloned
+            end
+        end
+        return val
     end
-    return val
 end
 
 local function FormatNumber(n)
@@ -1425,7 +1431,6 @@ local function FormatMerchantItemOption(itemId)
     return C.MerchantItemLabels[id] or id
 end
 
-local ReverseMerchantLabelToId = nil
 local function ResolveMerchantItemId(optionOrId)
     local raw = tostring(optionOrId or "")
     if raw == "" then return "" end
@@ -1433,15 +1438,15 @@ local function ResolveMerchantItemId(optionOrId)
     if bracketed and bracketed ~= "" then
         return bracketed
     end
-    if not ReverseMerchantLabelToId then
-        ReverseMerchantLabelToId = {}
+    if not Session.reverseMerchantLabelToId then
+        Session.reverseMerchantLabelToId = {}
         for id, lbl in pairs(C.MerchantItemLabels or {}) do
-            ReverseMerchantLabelToId[lbl] = id
-            ReverseMerchantLabelToId[id] = id
+            Session.reverseMerchantLabelToId[lbl] = id
+            Session.reverseMerchantLabelToId[id] = id
         end
     end
-    if ReverseMerchantLabelToId[raw] then
-        return ReverseMerchantLabelToId[raw]
+    if Session.reverseMerchantLabelToId[raw] then
+        return Session.reverseMerchantLabelToId[raw]
     end
     return raw
 end
@@ -1503,120 +1508,121 @@ end
 -- ============================================================================
 -- [6] HỆ THỐNG ECS & CHIẾN ĐẤU (LỌC MULTI QUÁI THEO WORLD, ENGAGE PACKS, ABILITIES, DROPS)
 -- ============================================================================
-local cachedLiveEcs = nil
-local lastEcsGcScanAt = 0
+local GetEcsContext
+do
+    -- Phân biệt thực thể jecs.World đang sống với bảng prototype class World (prototype có rawget(t, "query") == function nhưng không có entity_index/archetypes)
+    local function IsValidWorldInstance(t)
+        if type(t) ~= "table" then return false end
+        if getmetatable(t) == nil then return false end
+        if rawget(t, "query") ~= nil then return false end
+        if rawget(t, "entity_index") == nil and rawget(t, "archetypes") == nil then
+            return false
+        end
+        local ok, hasMethods = pcall(function()
+            return typeof(t.query) == "function"
+                and typeof(t.contains) == "function"
+                and typeof(t.get) == "function"
+                and typeof(t.has) == "function"
+        end)
+        return ok and hasMethods == true
+    end
 
--- Phân biệt thực thể jecs.World đang sống với bảng prototype class World (prototype có rawget(t, "query") == function nhưng không có entity_index/archetypes)
-local function IsValidWorldInstance(t)
-    if type(t) ~= "table" then return false end
-    if getmetatable(t) == nil then return false end
-    if rawget(t, "query") ~= nil then return false end
-    if rawget(t, "entity_index") == nil and rawget(t, "archetypes") == nil then
-        return false
+    -- Phân biệt thực thể replecs ClientReplicator đang sống với bảng prototype class ClientReplicator (thực thể thật có rawget(t, "world") là jecs.World instance)
+    local function IsValidReplicatorInstance(t, expectedWorld)
+        if type(t) ~= "table" then return false end
+        if getmetatable(t) == nil then return false end
+        if rawget(t, "get_server_entity") ~= nil then return false end
+        local repWorld = rawget(t, "world")
+        if not IsValidWorldInstance(repWorld) then
+            return false
+        end
+        if expectedWorld and repWorld ~= expectedWorld then
+            return false
+        end
+        local ok, hasMethods = pcall(function()
+            return typeof(t.get_server_entity) == "function"
+                and typeof(t.get_client_entity) == "function"
+        end)
+        return ok and hasMethods == true
     end
-    local ok, hasMethods = pcall(function()
-        return typeof(t.query) == "function"
-            and typeof(t.contains) == "function"
-            and typeof(t.get) == "function"
-            and typeof(t.has) == "function"
-    end)
-    return ok and hasMethods == true
-end
 
--- Phân biệt thực thể replecs ClientReplicator đang sống với bảng prototype class ClientReplicator (thực thể thật có rawget(t, "world") là jecs.World instance)
-local function IsValidReplicatorInstance(t, expectedWorld)
-    if type(t) ~= "table" then return false end
-    if getmetatable(t) == nil then return false end
-    if rawget(t, "get_server_entity") ~= nil then return false end
-    local repWorld = rawget(t, "world")
-    if not IsValidWorldInstance(repWorld) then
-        return false
+    local function IsValidComponentsTable(t)
+        return type(t) == "table"
+            and rawget(t, "Player") ~= nil
+            and rawget(t, "CurrentHealth") ~= nil
+            and rawget(t, "Targetable") ~= nil
+            and rawget(t, "Pack") ~= nil
     end
-    if expectedWorld and repWorld ~= expectedWorld then
-        return false
-    end
-    local ok, hasMethods = pcall(function()
-        return typeof(t.get_server_entity) == "function"
-            and typeof(t.get_client_entity) == "function"
-    end)
-    return ok and hasMethods == true
-end
 
-local function IsValidComponentsTable(t)
-    return type(t) == "table"
-        and rawget(t, "Player") ~= nil
-        and rawget(t, "CurrentHealth") ~= nil
-        and rawget(t, "Targetable") ~= nil
-        and rawget(t, "Pack") ~= nil
-end
-
-local function ExtractWorldAndComponentsFromClosure(fn, getUpvals)
-    if not (getUpvals and typeof(fn) == "function") then
-        return nil, nil
-    end
-    local okU, uvs = pcall(getUpvals, fn)
-    if not (okU and type(uvs) == "table") then
-        return nil, nil
-    end
-    local wFound, cFound = nil, nil
-    for _, uv in pairs(uvs) do
-        if type(uv) == "table" then
-            if not wFound and IsValidWorldInstance(uv) then
-                wFound = uv
-            elseif not cFound and IsValidComponentsTable(uv) then
-                cFound = uv
+    local function ExtractWorldAndComponentsFromClosure(fn, getUpvals)
+        if not (getUpvals and typeof(fn) == "function") then
+            return nil, nil
+        end
+        local okU, uvs = pcall(getUpvals, fn)
+        if not (okU and type(uvs) == "table") then
+            return nil, nil
+        end
+        local wFound, cFound = nil, nil
+        for _, uv in pairs(uvs) do
+            if type(uv) == "table" then
+                if not wFound and IsValidWorldInstance(uv) then
+                    wFound = uv
+                elseif not cFound and IsValidComponentsTable(uv) then
+                    cFound = uv
+                end
             end
         end
+        return wFound, cFound
     end
-    return wFound, cFound
-end
 
-local function FindLiveEcsContext()
-    if cachedLiveEcs
-        and IsValidWorldInstance(cachedLiveEcs.world)
-        and IsValidReplicatorInstance(cachedLiveEcs.replicator, cachedLiveEcs.world)
-        and cachedLiveEcs.Components
-        and cachedLiveEcs.Packs then
-        return cachedLiveEcs.world, cachedLiveEcs.Components, cachedLiveEcs.Packs, cachedLiveEcs.replicator, cachedLiveEcs.TeamUtils
-    end
-    if os.clock() - lastEcsGcScanAt < 2.0 and cachedLiveEcs then
-        return cachedLiveEcs.world, cachedLiveEcs.Components, cachedLiveEcs.Packs, cachedLiveEcs.replicator, cachedLiveEcs.TeamUtils
-    end
-    lastEcsGcScanAt = os.clock()
+    GetEcsContext = function()
+        local cached = Session.cachedLiveEcs
+        if cached
+            and IsValidWorldInstance(cached.world)
+            and IsValidReplicatorInstance(cached.replicator, cached.world)
+            and cached.Components
+            and cached.Packs then
+            return cached.world, cached.Components, cached.Packs, cached.replicator, cached.TeamUtils
+        end
+        if os.clock() - Session.lastEcsGcScanAt < 2.0 and cached then
+            return cached.world, cached.Components, cached.Packs, cached.replicator, cached.TeamUtils
+        end
+        Session.lastEcsGcScanAt = os.clock()
 
-    local getConns = (typeof(getconnections) == "function" and getconnections)
-        or (typeof(get_signal_connections) == "function" and get_signal_connections)
-        or nil
-    local getUpvals = (type(debug) == "table" and typeof(debug.getupvalues) == "function" and debug.getupvalues)
-        or (typeof(getupvalues) == "function" and getupvalues)
-        or nil
+        local getConns = (typeof(getconnections) == "function" and getconnections)
+            or (typeof(get_signal_connections) == "function" and get_signal_connections)
+            or nil
+        local getUpvals = (type(debug) == "table" and typeof(debug.getupvalues) == "function" and debug.getupvalues)
+            or (typeof(getupvalues) == "function" and getupvalues)
+            or nil
 
-    local liveWorld, liveComponents, livePacks, liveReplicator, liveTeamUtils = nil, nil, nil, nil, nil
+        local liveWorld, liveComponents, livePacks, liveReplicator, liveTeamUtils = nil, nil, nil, nil, nil
 
-    -- 1. Bắt trực tiếp live replicator, world, Components từ kết nối OnClientEvent đang chạy của game (O(1))
-    if getConns and getUpvals then
-        for _, remoteName in ipairs({ "Entity_PlayAnimation", "Entity_PlayEffect", "StageScene_Shout", "Action_Bark" }) do
-            local rem = GetNetworkRemote(remoteName)
-            if rem and rem:IsA("RemoteEvent") then
-                local okC, conns = pcall(getConns, rem.OnClientEvent)
-                EnsureHighIdentity()
-                if okC and type(conns) == "table" then
-                    for _, conn in ipairs(conns) do
-                        local fn = type(conn) == "table" and (conn.Function or conn.Callback)
-                            or (typeof(conn) == "userdata" and pcall(function() return conn.Function end) and conn.Function)
-                            or nil
-                        if typeof(fn) == "function" then
-                            local okU, upvals = pcall(getUpvals, fn)
-                            if okU and type(upvals) == "table" then
-                                for _, uv in pairs(upvals) do
-                                    if type(uv) == "table" then
-                                        if not liveReplicator and IsValidReplicatorInstance(uv, liveWorld) then
-                                            liveReplicator = uv
-                                            liveWorld = liveWorld or rawget(uv, "world")
-                                        elseif not liveWorld and IsValidWorldInstance(uv) then
-                                            liveWorld = uv
-                                        elseif not liveComponents and IsValidComponentsTable(uv) then
-                                            liveComponents = uv
+        -- 1. Bắt trực tiếp live replicator, world, Components từ kết nối OnClientEvent đang chạy của game (O(1))
+        if getConns and getUpvals then
+            for _, remoteName in ipairs({ "Entity_PlayAnimation", "Entity_PlayEffect", "StageScene_Shout", "Action_Bark" }) do
+                local rem = GetNetworkRemote(remoteName)
+                if rem and rem:IsA("RemoteEvent") then
+                    local okC, conns = pcall(getConns, rem.OnClientEvent)
+                    EnsureHighIdentity()
+                    if okC and type(conns) == "table" then
+                        for _, conn in ipairs(conns) do
+                            local fn = type(conn) == "table" and (conn.Function or conn.Callback)
+                                or (typeof(conn) == "userdata" and pcall(function() return conn.Function end) and conn.Function)
+                                or nil
+                            if typeof(fn) == "function" then
+                                local okU, upvals = pcall(getUpvals, fn)
+                                if okU and type(upvals) == "table" then
+                                    for _, uv in pairs(upvals) do
+                                        if type(uv) == "table" then
+                                            if not liveReplicator and IsValidReplicatorInstance(uv, liveWorld) then
+                                                liveReplicator = uv
+                                                liveWorld = liveWorld or rawget(uv, "world")
+                                            elseif not liveWorld and IsValidWorldInstance(uv) then
+                                                liveWorld = uv
+                                            elseif not liveComponents and IsValidComponentsTable(uv) then
+                                                liveComponents = uv
+                                            end
                                         end
                                     end
                                 end
@@ -1624,142 +1630,132 @@ local function FindLiveEcsContext()
                         end
                     end
                 end
-            end
-            if liveWorld and liveReplicator and liveComponents then
-                break
+                if liveWorld and liveReplicator and liveComponents then
+                    break
+                end
             end
         end
-    end
 
-    -- 2. Kiểm tra các module nạp qua GetGameModule (SafeRequire ở Identity 2)
-    local modWorld = GetGameModule("ecs_world", { "Shared", "ecs", "world" })
-    local modComponents = GetGameModule("Components", { "Shared", "Components" })
-    local modPacks = GetGameModule("Packs", { "Shared", "combat", "Packs" })
-    local modReplicator = GetGameModule("replicator", { "Client", "replicator" })
-    local modTeamUtils = GetGameModule("TeamUtils", { "Shared", "utils", "TeamUtils" })
+        -- 2. Kiểm tra các module nạp qua GetGameModule (SafeRequire ở Identity 2)
+        local modWorld = GetGameModule("ecs_world", { "Shared", "ecs", "world" })
+        local modComponents = GetGameModule("Components", { "Shared", "Components" })
+        local modPacks = GetGameModule("Packs", { "Shared", "combat", "Packs" })
+        local modReplicator = GetGameModule("replicator", { "Client", "replicator" })
+        local modTeamUtils = GetGameModule("TeamUtils", { "Shared", "utils", "TeamUtils" })
 
-    if type(modPacks) == "table" and typeof(modPacks.isLivePack) == "function" and getUpvals then
-        local packW, packC = ExtractWorldAndComponentsFromClosure(modPacks.isLivePack, getUpvals)
-        if packW and (not liveWorld or packW == liveWorld) then
-            liveWorld = liveWorld or packW
-            liveComponents = liveComponents or packC
+        if type(modPacks) == "table" and typeof(modPacks.isLivePack) == "function" and getUpvals then
+            local packW, packC = ExtractWorldAndComponentsFromClosure(modPacks.isLivePack, getUpvals)
+            if packW and (not liveWorld or packW == liveWorld) then
+                liveWorld = liveWorld or packW
+                liveComponents = liveComponents or packC
+                livePacks = modPacks
+            end
+        end
+
+        if not liveWorld and IsValidWorldInstance(modWorld) then
+            liveWorld = modWorld
+        end
+        if not liveComponents and IsValidComponentsTable(modComponents) then
+            liveComponents = modComponents
+        end
+        if not liveReplicator and IsValidReplicatorInstance(modReplicator, liveWorld) then
+            liveReplicator = modReplicator
+            liveWorld = liveWorld or rawget(modReplicator, "world")
+        end
+        if not livePacks and type(modPacks) == "table" and (not liveWorld or modWorld == liveWorld) then
             livePacks = modPacks
         end
-    end
+        if not liveTeamUtils and type(modTeamUtils) == "table" and (not liveWorld or modWorld == liveWorld) then
+            liveTeamUtils = modTeamUtils
+        end
 
-    if not liveWorld and IsValidWorldInstance(modWorld) then
-        liveWorld = modWorld
-    end
-    if not liveComponents and IsValidComponentsTable(modComponents) then
-        liveComponents = modComponents
-    end
-    if not liveReplicator and IsValidReplicatorInstance(modReplicator, liveWorld) then
-        liveReplicator = modReplicator
-        liveWorld = liveWorld or rawget(modReplicator, "world")
-    end
-    if not livePacks and type(modPacks) == "table" and (not liveWorld or modWorld == liveWorld) then
-        livePacks = modPacks
-    end
-    if not liveTeamUtils and type(modTeamUtils) == "table" and (not liveWorld or modWorld == liveWorld) then
-        liveTeamUtils = modTeamUtils
-    end
-
-    -- 3. Nếu Executor tách cache require() khiến thiếu livePacks / liveReplicator / liveTeamUtils của đúng liveWorld, quét GC với bộ lọc instance chuẩn
-    if not (liveWorld and liveComponents and livePacks and liveReplicator) then
-        local gcFn = (typeof(getgc) == "function" and getgc) or nil
-        if gcFn then
-            local okGc, list = pcall(gcFn, true)
-            EnsureHighIdentity()
-            if okGc and type(list) == "table" then
-                for i = 1, #list do
-                    local obj = list[i]
-                    if type(obj) == "table" then
-                        if not liveReplicator and IsValidReplicatorInstance(obj, liveWorld) then
-                            liveReplicator = obj
-                            liveWorld = liveWorld or rawget(obj, "world")
-                        elseif typeof(rawget(obj, "activeSummaries")) == "function" and typeof(rawget(obj, "isLivePack")) == "function" then
-                            local wCandidate, cCandidate = ExtractWorldAndComponentsFromClosure(rawget(obj, "isLivePack"), getUpvals)
-                            if wCandidate and (not liveWorld or wCandidate == liveWorld) then
-                                livePacks = obj
-                                liveWorld = liveWorld or wCandidate
-                                liveComponents = liveComponents or cCandidate
-                            elseif not livePacks then
-                                livePacks = obj
-                            end
-                        elseif not liveTeamUtils and typeof(rawget(obj, "areEntitiesHostile")) == "function" then
-                            if getUpvals then
-                                local wCandidate = ExtractWorldAndComponentsFromClosure(rawget(obj, "areEntitiesHostile"), getUpvals)
-                                if not liveWorld or not wCandidate or wCandidate == liveWorld then
+        -- 3. Nếu Executor tách cache require() khiến thiếu livePacks / liveReplicator / liveTeamUtils của đúng liveWorld, quét GC với bộ lọc instance chuẩn
+        if not (liveWorld and liveComponents and livePacks and liveReplicator) then
+            local gcFn = (typeof(getgc) == "function" and getgc) or nil
+            if gcFn then
+                local okGc, list = pcall(gcFn, true)
+                EnsureHighIdentity()
+                if okGc and type(list) == "table" then
+                    for i = 1, #list do
+                        local obj = list[i]
+                        if type(obj) == "table" then
+                            if not liveReplicator and IsValidReplicatorInstance(obj, liveWorld) then
+                                liveReplicator = obj
+                                liveWorld = liveWorld or rawget(obj, "world")
+                            elseif typeof(rawget(obj, "activeSummaries")) == "function" and typeof(rawget(obj, "isLivePack")) == "function" then
+                                local wCandidate, cCandidate = ExtractWorldAndComponentsFromClosure(rawget(obj, "isLivePack"), getUpvals)
+                                if wCandidate and (not liveWorld or wCandidate == liveWorld) then
+                                    livePacks = obj
+                                    liveWorld = liveWorld or wCandidate
+                                    liveComponents = liveComponents or cCandidate
+                                elseif not livePacks then
+                                    livePacks = obj
+                                end
+                            elseif not liveTeamUtils and typeof(rawget(obj, "areEntitiesHostile")) == "function" then
+                                if getUpvals then
+                                    local wCandidate = ExtractWorldAndComponentsFromClosure(rawget(obj, "areEntitiesHostile"), getUpvals)
+                                    if not liveWorld or not wCandidate or wCandidate == liveWorld then
+                                        liveTeamUtils = obj
+                                    end
+                                else
                                     liveTeamUtils = obj
                                 end
-                            else
-                                liveTeamUtils = obj
+                            elseif not liveComponents and IsValidComponentsTable(obj) then
+                                liveComponents = obj
                             end
-                        elseif not liveComponents and IsValidComponentsTable(obj) then
-                            liveComponents = obj
                         end
                     end
                 end
             end
         end
-    end
-    EnsureHighIdentity()
+        EnsureHighIdentity()
 
-    liveWorld = (IsValidWorldInstance(liveWorld) and liveWorld) or (IsValidWorldInstance(modWorld) and modWorld) or nil
-    liveComponents = liveComponents or modComponents
-    livePacks = livePacks or modPacks
-    liveReplicator = (IsValidReplicatorInstance(liveReplicator, liveWorld) and liveReplicator)
-        or (IsValidReplicatorInstance(modReplicator, liveWorld) and modReplicator)
-        or (IsValidReplicatorInstance(liveReplicator, nil) and liveReplicator)
-        or (IsValidReplicatorInstance(modReplicator, nil) and modReplicator)
-        or nil
-    liveTeamUtils = liveTeamUtils or modTeamUtils
+        liveWorld = (IsValidWorldInstance(liveWorld) and liveWorld) or (IsValidWorldInstance(modWorld) and modWorld) or nil
+        liveComponents = liveComponents or modComponents
+        livePacks = livePacks or modPacks
+        liveReplicator = (IsValidReplicatorInstance(liveReplicator, liveWorld) and liveReplicator)
+            or (IsValidReplicatorInstance(modReplicator, liveWorld) and modReplicator)
+            or (IsValidReplicatorInstance(liveReplicator, nil) and liveReplicator)
+            or (IsValidReplicatorInstance(modReplicator, nil) and modReplicator)
+            or nil
+        liveTeamUtils = liveTeamUtils or modTeamUtils
 
-    if liveWorld and liveComponents and livePacks and liveReplicator then
-        cachedLiveEcs = {
-            world = liveWorld,
-            Components = liveComponents,
-            Packs = livePacks,
-            replicator = liveReplicator,
-            TeamUtils = liveTeamUtils
-        }
-        return liveWorld, liveComponents, livePacks, liveReplicator, liveTeamUtils
+        if liveWorld and liveComponents and livePacks and liveReplicator then
+            Session.cachedLiveEcs = {
+                world = liveWorld,
+                Components = liveComponents,
+                Packs = livePacks,
+                replicator = liveReplicator,
+                TeamUtils = liveTeamUtils
+            }
+            return liveWorld, liveComponents, livePacks, liveReplicator, liveTeamUtils
+        end
+        return nil
     end
-    return nil
 end
 
-local function GetEcsContext()
-    local world, Components, Packs, replicator, TeamUtils = FindLiveEcsContext()
-    if world and Components and Packs and replicator then
-        return world, Components, Packs, replicator, TeamUtils
-    end
-    return nil
-end
-
-local cachedLocalEntity = nil
 local function FindLocalPlayerEntity(world, Components)
-    if cachedLocalEntity then
+    if Session.cachedLocalEntity then
         local okHas, stillValid = pcall(function()
-            return world:contains(cachedLocalEntity) and world:get(cachedLocalEntity, Components.Player) == LocalPlayer
+            return world:contains(Session.cachedLocalEntity) and world:get(Session.cachedLocalEntity, Components.Player) == LocalPlayer
         end)
         if okHas and stillValid then
-            return cachedLocalEntity
+            return Session.cachedLocalEntity
         end
-        cachedLocalEntity = nil
+        Session.cachedLocalEntity = nil
     end
     for entity, player in world:query(Components.Player) do
         if player == LocalPlayer then
-            cachedLocalEntity = entity
+            Session.cachedLocalEntity = entity
             return entity
         end
     end
     return nil
 end
 
-local CharacterElementCache = {}
 local function GetCharacterElement(characterId)
     if type(characterId) ~= "string" or characterId == "" then return nil end
-    local cached = CharacterElementCache[characterId]
+    local cached = Session.characterElementCache[characterId]
     if cached ~= nil then
         return cached or nil
     end
@@ -1768,7 +1764,7 @@ local function GetCharacterElement(characterId)
         local okD, def = SafeCallGame(charDefs.get, characterId)
         if okD and type(def) == "table" then
             local elem = type(def.element) == "string" and def.element or false
-            CharacterElementCache[characterId] = elem
+            Session.characterElementCache[characterId] = elem
             return elem or nil
         end
     end
@@ -1973,15 +1969,13 @@ local function TravelToWorld(areaId, silent)
 end
 
 -- Đánh giá số lượng chiến binh (Unit) đang tử trận (Dying / KnockedOut / HP <= 0) và % máu thấp nhất của đội hình (có cache 0.25s chống quét lặp ECS)
-local lastHealthEvalAt = 0
-local cachedDownCount, cachedTotalUnits, cachedMinHpPct, cachedAvgHpPct, cachedFoundUnits = 0, 0, 1.0, 1.0, 0
-
 local function EvaluatePlayerUnitsHealthAndDowned()
     local now = os.clock()
-    if now - lastHealthEvalAt < 0.25 then
-        return cachedDownCount, cachedTotalUnits, cachedMinHpPct, cachedAvgHpPct, cachedFoundUnits
+    local hc = Session.healthCache
+    if now - Session.lastHealthEvalAt < 0.25 then
+        return hc.downCount, hc.totalUnits, hc.minHpPct, hc.avgHpPct, hc.foundUnits
     end
-    lastHealthEvalAt = now
+    Session.lastHealthEvalAt = now
 
     local rosterList = nil
     local rosterSvc = GetGameModule("ClientRosterService", { "Client", "services", "ClientRosterService" })
@@ -2017,7 +2011,7 @@ local function EvaluatePlayerUnitsHealthAndDowned()
     end
 
     if totalUnits == 0 then
-        cachedDownCount, cachedTotalUnits, cachedMinHpPct, cachedAvgHpPct, cachedFoundUnits = 0, 0, 1.0, 1.0, 0
+        hc.downCount, hc.totalUnits, hc.minHpPct, hc.avgHpPct, hc.foundUnits = 0, 0, 1.0, 1.0, 0
         return 0, 0, 1.0, 1.0, 0
     end
 
@@ -2083,7 +2077,7 @@ local function EvaluatePlayerUnitsHealthAndDowned()
         avgHpPct = 1.0
     end
 
-    cachedDownCount, cachedTotalUnits, cachedMinHpPct, cachedAvgHpPct, cachedFoundUnits = downCount, totalUnits, minHpPct, avgHpPct, foundUnits
+    hc.downCount, hc.totalUnits, hc.minHpPct, hc.avgHpPct, hc.foundUnits = downCount, totalUnits, minHpPct, avgHpPct, foundUnits
     return downCount, totalUnits, minHpPct, avgHpPct, foundUnits
 end
 
@@ -2188,29 +2182,6 @@ local function CheckTeamRecoveryPause()
     return false, nil
 end
 
-local function IsPlayerPackAlreadyEngaging(world, Components, Packs, localEntity, targetPack)
-    if not (world and Components and Packs and targetPack) then
-        return false
-    end
-    local hostileFocus = GetGameModule("HostileFocus", { "Client", "HostileFocus" })
-    if type(hostileFocus) == "table" and typeof(hostileFocus.resolve) == "function" then
-        local okF, focus = SafeCallGame(hostileFocus.resolve)
-        if okF and type(focus) == "table" and type(focus.packSet) == "table" and focus.packSet[targetPack] == true then
-            return true
-        end
-    end
-    if localEntity and typeof(Packs.ownedPack) == "function" and Components.PackAttackOrder then
-        local okP, playerPack = SafeCallGame(Packs.ownedPack, localEntity)
-        if okP and playerPack then
-            local okT, currentOrder = pcall(world.target, world, playerPack, Components.PackAttackOrder)
-            if okT and currentOrder == targetPack then
-                return true
-            end
-        end
-    end
-    return false
-end
-
 local function TryEngageNearestPack(forceTeleportInRun)
     local hrp = GetRootPart()
     if not hrp then return false, "chưa có nhân vật" end
@@ -2286,7 +2257,6 @@ local function TryEngageNearestPack(forceTeleportInRun)
     -- Trong Raid/Stage/Boss/Defense luôn bỏ qua bộ lọc quái Overworld; ở Overworld thì lọc theo Quest hoặc Multi Quái trước
     local bestPack, bestSummary, bestDist, bestFlatDist, bestIsBoss, bestCharId = selectBestPack(inRunMode)
     if not bestPack and isOverworld and hasQuestOverride then
-        -- Nếu bãi quái mục tiêu Quest đang chờ hồi sinh, đánh tạm bãi quái gần nhất để không đứng im
         bestPack, bestSummary, bestDist, bestFlatDist, bestIsBoss, bestCharId = selectBestPack(true)
     end
 
@@ -2300,7 +2270,6 @@ local function TryEngageNearestPack(forceTeleportInRun)
     end
 
     -- Server kiểm tra vector.flatten(centroid - playerPos).Magnitude <= CombatConfig.ATTACK_ORDER.MAX_DISTANCE (40 studs).
-    -- Nếu mục tiêu nằm ngoài 34 studs ngang (hoặc bật Tele / đang trong Run / làm Quest), tự động tiếp cận vào tầm 10 studs trước khi gửi EngagePack.
     local maxOrderRange = tonumber(C.AttackOrderMaxDistance) or 40
     local needsRangeApproach = bestFlatDist > (maxOrderRange - 6)
     local shouldTeleport = Config.TeleportToPack or forceTele or needsRangeApproach or (hasQuestOverride and bestDist > (tonumber(Config.EngageMaxDist) or 150))
@@ -2313,7 +2282,25 @@ local function TryEngageNearestPack(forceTeleportInRun)
     end
 
     local now = os.clock()
-    local alreadyEngaged = IsPlayerPackAlreadyEngaging(world, Components, Packs, localEntity, bestPack)
+    local isAlreadyTargeting = false
+    local hostileFocus = GetGameModule("HostileFocus", { "Client", "HostileFocus" })
+    if type(hostileFocus) == "table" and typeof(hostileFocus.resolve) == "function" then
+        local okF, focus = SafeCallGame(hostileFocus.resolve)
+        if okF and type(focus) == "table" and type(focus.packSet) == "table" and focus.packSet[bestPack] == true then
+            isAlreadyTargeting = true
+        end
+    end
+    if not isAlreadyTargeting and localEntity and typeof(Packs.ownedPack) == "function" and Components.PackAttackOrder then
+        local okP, playerPack = SafeCallGame(Packs.ownedPack, localEntity)
+        if okP and playerPack then
+            local okT, currentOrder = pcall(world.target, world, playerPack, Components.PackAttackOrder)
+            if okT and currentOrder == bestPack then
+                isAlreadyTargeting = true
+            end
+        end
+    end
+
+    local alreadyEngaged = isAlreadyTargeting
         and (Session.lastPackEntity == serverEntity)
         and (now - Session.lastPackTime < 1.5)
 
@@ -2622,13 +2609,13 @@ end
 -- ============================================================================
 -- [7] BOSS, STORY MISSION, QUESTGO, SMART RAID CARDS, DEFENSE & MATCH RESULTS
 -- ============================================================================
-local function FindBossGateModelInWorkspace(worldId)
-    for _, inst in ipairs(CollectionService:GetTagged("BossGate")) do
-        if inst:IsA("Model") and inst:IsDescendantOf(Workspace) and inst:GetAttribute("WorldId") == worldId then
-            return inst
-        end
+local function RepairSingle(repairId)
+    local pOk, ok, err = InvokeRemote("RepairObject", repairId)
+    if pOk and ok == true then
+        Session.knownRepaired[repairId] = true
+        return true, nil
     end
-    return nil
+    return false, tostring(err or ok or "chưa đủ điều kiện")
 end
 
 local function ChallengeSelectedBoss(worldId)
@@ -2663,10 +2650,12 @@ local function ChallengeSelectedBoss(worldId)
                 TravelToWorld(targetWorld, true)
                 task.wait(0.2)
             end
-            local gateModel = FindBossGateModelInWorkspace(targetWorld)
-            if gateModel then
-                TeleportCharacterTo(gateModel:GetPivot().Position + Vector3.new(0, 3, 6))
-                task.wait(0.15)
+            for _, inst in ipairs(CollectionService:GetTagged("BossGate")) do
+                if inst:IsA("Model") and inst:IsDescendantOf(Workspace) and inst:GetAttribute("WorldId") == targetWorld then
+                    TeleportCharacterTo(inst:GetPivot().Position + Vector3.new(0, 3, 6))
+                    task.wait(0.15)
+                    break
+                end
             end
         end
         RepairSingle(portalRepairId)
@@ -2784,53 +2773,51 @@ local function StartSelectedRaidChallenge(baseId, tier)
     return QueueLobbyGamemodeAndReady("raid", nil, targetBase, targetTier)
 end
 
-local function GetLiveMatchSnapshot()
-    if type(Session.matchSnapshot) == "table" then
-        return Session.matchSnapshot
-    end
-    local getConns = (typeof(getconnections) == "function" and getconnections)
-        or (typeof(get_signal_connections) == "function" and get_signal_connections)
-        or nil
-    local getUpvals = (type(debug) == "table" and typeof(debug.getupvalues) == "function" and debug.getupvalues)
-        or (typeof(getupvalues) == "function" and getupvalues)
-        or nil
-    local fusion = GetGameModule("Fusion", { "Packages", "Fusion" })
-    local snapRemote = GetNetworkRemote("MatchResults_Snapshot")
-    if getConns and getUpvals and snapRemote and snapRemote:IsA("RemoteEvent") and type(fusion) == "table" and typeof(fusion.peek) == "function" then
-        local okC, conns = pcall(getConns, snapRemote.OnClientEvent)
-        EnsureHighIdentity()
-        if okC and type(conns) == "table" then
-            for _, conn in ipairs(conns) do
-                local fn = type(conn) == "table" and (conn.Function or conn.Callback)
-                    or (typeof(conn) == "userdata" and pcall(function() return conn.Function end) and conn.Function)
-                    or nil
-                if typeof(fn) == "function" then
-                    local okU, uvs = pcall(getUpvals, fn)
-                    if okU and type(uvs) == "table" then
-                        for _, uv in pairs(uvs) do
-                            if type(uv) == "table" then
-                                local okP, val = SafeCallGame(fusion.peek, uv)
-                                if okP and type(val) == "table" and type(val.status) == "string" and val.gamemodeId ~= nil then
-                                    Session.matchSnapshot = val
-                                    return val
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-    return Session.matchSnapshot
-end
-
 local function VoteMatchResults(option, forceSend)
     local gamemode = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld")
     if gamemode == "overworld" then
         return false, "đang ở Overworld"
     end
 
-    local snap = GetLiveMatchSnapshot()
+    local snap = Session.matchSnapshot
+    if type(snap) ~= "table" then
+        local getConns = (typeof(getconnections) == "function" and getconnections)
+            or (typeof(get_signal_connections) == "function" and get_signal_connections)
+            or nil
+        local getUpvals = (type(debug) == "table" and typeof(debug.getupvalues) == "function" and debug.getupvalues)
+            or (typeof(getupvalues) == "function" and getupvalues)
+            or nil
+        local fusion = GetGameModule("Fusion", { "Packages", "Fusion" })
+        local snapRemote = GetNetworkRemote("MatchResults_Snapshot")
+        if getConns and getUpvals and snapRemote and snapRemote:IsA("RemoteEvent") and type(fusion) == "table" and typeof(fusion.peek) == "function" then
+            local okC, conns = pcall(getConns, snapRemote.OnClientEvent)
+            EnsureHighIdentity()
+            if okC and type(conns) == "table" then
+                for _, conn in ipairs(conns) do
+                    local fn = type(conn) == "table" and (conn.Function or conn.Callback)
+                        or (typeof(conn) == "userdata" and pcall(function() return conn.Function end) and conn.Function)
+                        or nil
+                    if typeof(fn) == "function" then
+                        local okU, uvs = pcall(getUpvals, fn)
+                        if okU and type(uvs) == "table" then
+                            for _, uv in pairs(uvs) do
+                                if type(uv) == "table" then
+                                    local okP, val = SafeCallGame(fusion.peek, uv)
+                                    if okP and type(val) == "table" and type(val.status) == "string" and val.gamemodeId ~= nil then
+                                        Session.matchSnapshot = val
+                                        snap = val
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    if type(snap) == "table" then break end
+                end
+            end
+        end
+    end
+
     local matchEnded = (type(snap) == "table" and type(snap.status) == "string" and snap.status ~= "ongoing")
         or (type(Session.matchOutcome) == "string" and Session.matchOutcome ~= "ongoing")
 
@@ -2861,7 +2848,6 @@ local function VoteMatchResults(option, forceSend)
 
     local runKey = (type(snap) == "table" and tostring(snap.runId or "")) or tostring(Session.currentRunId or "active")
     local now = os.clock()
-    -- Không gọi lặp MatchResults_SetVote hay ClientMatchResultsService.SetVote khi đã vote đúng lựa chọn (tránh tự hủy vote / khóa màn hình Depart)
     if not forceSend then
         if Session.currentVoteOption == choice then
             return true, "đã giữ vote " .. tostring(choice)
@@ -2898,25 +2884,6 @@ local function LeaveCurrentRun()
     return true, "Đã gửi MatchResults_LeaveRun"
 end
 
-local function ChooseBestRaidCard(cards)
-    local preferred = Config.PreferredRaidCard
-    local bestId, bestScore = nil, -1
-    for _, entry in ipairs(cards) do
-        local cid = type(entry) == "table" and (entry.id or entry.cardId) or entry
-        if type(cid) == "string" and cid ~= "" then
-            if preferred and preferred ~= "Tự động theo thứ tự ưu tiên DPS" and cid == preferred then
-                return cid
-            end
-            local score = C.RaidCardPriority[cid] or 10
-            if score > bestScore then
-                bestScore = score
-                bestId = cid
-            end
-        end
-    end
-    return bestId
-end
-
 local function HandleRaidIntermission(forceVoteAndReady)
     local gs = ReplicatedStorage:FindFirstChild("GamemodeState")
     local rawJson = gs and gs:GetAttribute("RaidIntermission")
@@ -2924,7 +2891,22 @@ local function HandleRaidIntermission(forceVoteAndReady)
         local okDec, state = pcall(HttpService.JSONDecode, HttpService, rawJson)
         if okDec and type(state) == "table" then
             if (Config.AutoRaidVoteCard or forceVoteAndReady) and type(state.cards) == "table" and #state.cards > 0 then
-                local chosenId = ChooseBestRaidCard(state.cards)
+                local preferred = Config.PreferredRaidCard
+                local chosenId, bestScore = nil, -1
+                for _, entry in ipairs(state.cards) do
+                    local cid = type(entry) == "table" and (entry.id or entry.cardId) or entry
+                    if type(cid) == "string" and cid ~= "" then
+                        if preferred and preferred ~= "Tự động theo thứ tự ưu tiên DPS" and cid == preferred then
+                            chosenId = cid
+                            break
+                        end
+                        local score = C.RaidCardPriority[cid] or 10
+                        if score > bestScore then
+                            bestScore = score
+                            chosenId = cid
+                        end
+                    end
+                end
                 if type(chosenId) == "string" and chosenId ~= "" then
                     FireRemote("Raid_VoteCard", chosenId)
                 end
@@ -3316,10 +3298,9 @@ local function AutoFeedEquippedChampions()
     return 0, "không có trái cây phù hợp hoặc đã đạt giới hạn cấp"
 end
 
-local ChampionRarityCache = {}
 local function GetChampionRarity(characterId)
     if type(characterId) ~= "string" or characterId == "" then return nil end
-    local cached = ChampionRarityCache[characterId]
+    local cached = Session.championRarityCache[characterId]
     if cached ~= nil then
         return cached or nil
     end
@@ -3328,7 +3309,7 @@ local function GetChampionRarity(characterId)
         local okD, def = SafeCallGame(charDefs.get, characterId)
         if okD and type(def) == "table" then
             local rar = type(def.rarity) == "string" and def.rarity or false
-            ChampionRarityCache[characterId] = rar
+            Session.championRarityCache[characterId] = rar
             return rar or nil
         end
     end
@@ -3667,30 +3648,19 @@ local function StepStatReroll()
     end
 end
 
-local function RepairSingle(repairId)
-    local pOk, ok, err = InvokeRemote("RepairObject", repairId)
-    if pOk and ok == true then
-        return true, nil
-    end
-    return false, tostring(err or ok or "chưa đủ điều kiện")
-end
-
-local function CanPlanRepair(repairId, repairedMap, clearedBosses, items)
-    local repairRules = GetGameModule("RepairRules", { "Shared", "RepairRules" })
-    if type(repairRules) == "table" and typeof(repairRules.planRepair) == "function" then
-        local okP, plan = SafeCallGame(repairRules.planRepair, repairedMap, clearedBosses, items, repairId)
-        return okP and type(plan) == "table"
-    end
-    return not repairedMap[repairId]
-end
-
 local function AutoRepairAllUnrepaired()
     local repairedMap = ReadStore("Repaired", "table") or {}
     local clearedBosses = ReadStore("ClearedBosses", "table") or {}
     local items = ReadStore("Items", "table") or {}
+    local repairRules = GetGameModule("RepairRules", { "Shared", "RepairRules" })
     local count = 0
     for _, rid in ipairs(C.Repairs) do
-        if not repairedMap[rid] and CanPlanRepair(rid, repairedMap, clearedBosses, items) then
+        local canPlan = not repairedMap[rid]
+        if canPlan and type(repairRules) == "table" and typeof(repairRules.planRepair) == "function" then
+            local okP, plan = SafeCallGame(repairRules.planRepair, repairedMap, clearedBosses, items, rid)
+            canPlan = okP and type(plan) == "table"
+        end
+        if not repairedMap[rid] and canPlan then
             local ok = RepairSingle(rid)
             if ok then
                 count = count + 1
@@ -4290,7 +4260,6 @@ end
 -- ============================================================================
 -- [9b] AUTO FARM BOSS / RAID / CHẾ ĐỘ THÔNG MINH (TỰ NHẬN DIỆN MỌI CHẾ ĐỘ)
 -- ============================================================================
-local lastUniversalQueueAt = 0
 local function StepUniversalModeFarm()
     local gamemode = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld")
 
@@ -4350,8 +4319,8 @@ local function StepUniversalModeFarm()
         return
     end
 
-    if os.clock() - lastUniversalQueueAt >= 2.0 then
-        lastUniversalQueueAt = os.clock()
+    if os.clock() - Session.lastUniversalQueueAt >= 2.0 then
+        Session.lastUniversalQueueAt = os.clock()
         if targetMode == "Vào & Farm World Boss Đã Chọn" then
             local okBoss, msg = ChallengeSelectedBoss(Config.SelectedBossWorld)
             Session.universalStatusText = "[OVERWORLD -> BOSS] " .. tostring(msg)
@@ -5071,21 +5040,21 @@ local function ClearTutorialTipsAndUnseen()
     end
 end
 
-local EspFolder = nil
 local function GetEspFolder()
     EnsureHighIdentity()
-    if EspFolder and EspFolder.Parent then
-        return EspFolder
+    if Session.espFolder and Session.espFolder.Parent then
+        return Session.espFolder
     end
-    EspFolder = Instance.new("Folder")
-    EspFolder.Name = "HelmACXMainEsp"
+    local folder = Instance.new("Folder")
+    folder.Name = "HelmACXMainEsp"
     local okParent = pcall(function()
-        EspFolder.Parent = (typeof(gethui) == "function" and gethui()) or game:GetService("CoreGui")
+        folder.Parent = (typeof(gethui) == "function" and gethui()) or game:GetService("CoreGui")
     end)
     if not okParent then
-        EspFolder.Parent = Workspace
+        folder.Parent = Workspace
     end
-    return EspFolder
+    Session.espFolder = folder
+    return folder
 end
 
 local function SyncEsp(kind, enabled, targetsFn, fill)
@@ -5159,90 +5128,90 @@ local EspKinds = {
 -- ============================================================================
 -- [11] ANTI-AFK CHỦ ĐỘNG (nhường chế độ AFK của game để giữ thưởng chơi lâu)
 -- ============================================================================
-local AFK_YIELD_UNTIL = 1020
-local AFK_LAST_RESORT = 1140
 local AntiAfk = { lastInput = Workspace:GetServerTimeNow(), lastNudge = nil, count = 0, detail = "", why = nil }
+local RunAntiAfk, AntiAfkStatusText
+do
+    local AFK_YIELD_UNTIL = 1020
+    local AFK_LAST_RESORT = 1140
 
-local function DecideAntiAfk(enabled, yieldToGame, interval, idle, playOn, inAfkMode)
-    if not enabled then return false, "đang TẮT" end
-    if idle < interval then return false, "đang có thao tác" end
-    if yieldToGame then
-        if inAfkMode and idle < AFK_LAST_RESORT then
-            return false, "nhường chế độ AFK của game"
+    local function DecideAntiAfk(enabled, yieldToGame, interval, idle, playOn, inAfkMode)
+        if not enabled then return false, "đang TẮT" end
+        if idle < interval then return false, "đang có thao tác" end
+        if yieldToGame then
+            if inAfkMode and idle < AFK_LAST_RESORT then
+                return false, "nhường chế độ AFK của game"
+            end
+            if playOn and not inAfkMode and idle < AFK_YIELD_UNTIL then
+                return false, "chờ game vào chế độ AFK"
+            end
         end
-        if playOn and not inAfkMode and idle < AFK_YIELD_UNTIL then
-            return false, "chờ game vào chế độ AFK"
-        end
+        return true, nil
     end
-    return true, nil
-end
 
-local function SendFakeInput(withMove)
-    local userOk = pcall(function()
-        VirtualUser:CaptureController()
-        VirtualUser:ClickButton2(Vector2.new(0, 0))
-    end)
-    local vimOk = pcall(function()
-        local vim = game:GetService("VirtualInputManager")
-        local function tap(key, hold)
-            vim:SendKeyEvent(true, key, false, game)
-            task.wait(hold)
-            vim:SendKeyEvent(false, key, false, game)
-        end
-        tap(Enum.KeyCode.F15, 0.05)
-        if withMove then
-            tap(Enum.KeyCode.W, 0.1)
-            tap(Enum.KeyCode.S, 0.1)
-        end
-    end)
-    return userOk or vimOk, string.format("VirtualUser %s, VirtualInputManager %s",
-        userOk and "OK" or "lỗi", vimOk and "OK" or "lỗi")
-end
+    local function SendFakeInput(withMove)
+        local userOk = pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new(0, 0))
+        end)
+        local vimOk = pcall(function()
+            local vim = game:GetService("VirtualInputManager")
+            local function tap(key, hold)
+                vim:SendKeyEvent(true, key, false, game)
+                task.wait(hold)
+                vim:SendKeyEvent(false, key, false, game)
+            end
+            tap(Enum.KeyCode.F15, 0.05)
+            if withMove then
+                tap(Enum.KeyCode.W, 0.1)
+                tap(Enum.KeyCode.S, 0.1)
+            end
+        end)
+        return userOk or vimOk, string.format("VirtualUser %s, VirtualInputManager %s",
+            userOk and "OK" or "lỗi", vimOk and "OK" or "lỗi")
+    end
 
-local function RunAntiAfk(force)
-    local now = Workspace:GetServerTimeNow()
-    local playOn = Workspace:GetAttribute(C.PlayRewardsOnAttribute) == true
-    local inAfkMode = type(LocalPlayer:GetAttribute(C.AfkSinceAttribute)) == "number"
-    local go, why = DecideAntiAfk(Config.AntiKick, Config.AntiAfkYield, Config.AntiAfkInterval, now - AntiAfk.lastInput, playOn, inAfkMode)
-    AntiAfk.why = why
-    if not (go or force) then
-        return
+    RunAntiAfk = function(force)
+        local now = Workspace:GetServerTimeNow()
+        local playOn = Workspace:GetAttribute(C.PlayRewardsOnAttribute) == true
+        local inAfkMode = type(LocalPlayer:GetAttribute(C.AfkSinceAttribute)) == "number"
+        local go, why = DecideAntiAfk(Config.AntiKick, Config.AntiAfkYield, Config.AntiAfkInterval, now - AntiAfk.lastInput, playOn, inAfkMode)
+        AntiAfk.why = why
+        if not (go or force) then
+            return
+        end
+        local ok, detail = SendFakeInput(Config.AntiAfkMove)
+        AntiAfk.lastInput, AntiAfk.lastNudge, AntiAfk.detail = now, now, detail
+        AntiAfk.why = nil
+        if ok then
+            AntiAfk.count = AntiAfk.count + 1
+        end
+        return ok, detail
     end
-    local ok, detail = SendFakeInput(Config.AntiAfkMove)
-    AntiAfk.lastInput, AntiAfk.lastNudge, AntiAfk.detail = now, now, detail
-    AntiAfk.why = nil
-    if ok then
-        AntiAfk.count = AntiAfk.count + 1
-    end
-    return ok, detail
-end
 
-local function AntiAfkStatusText()
-    if not Config.AntiKick then return "Anti-AFK: TẮT" end
-    local now = Workspace:GetServerTimeNow()
-    local text = "Anti-AFK: BẬT | rảnh " .. FormatDuration(now - AntiAfk.lastInput)
-    if AntiAfk.lastNudge then
-        text = text .. " | bấm cuối " .. FormatDuration(now - AntiAfk.lastNudge) .. " trước (" .. AntiAfk.detail .. ")"
+    AntiAfkStatusText = function()
+        if not Config.AntiKick then return "Anti-AFK: TẮT" end
+        local now = Workspace:GetServerTimeNow()
+        local text = "Anti-AFK: BẬT | rảnh " .. FormatDuration(now - AntiAfk.lastInput)
+        if AntiAfk.lastNudge then
+            text = text .. " | bấm cuối " .. FormatDuration(now - AntiAfk.lastNudge) .. " trước (" .. AntiAfk.detail .. ")"
+        end
+        if AntiAfk.why and AntiAfk.why ~= "đang có thao tác" then
+            text = text .. " | " .. AntiAfk.why
+        end
+        return text
     end
-    if AntiAfk.why and AntiAfk.why ~= "đang có thao tác" then
-        text = text .. " | " .. AntiAfk.why
-    end
-    return text
 end
 
 -- ============================================================================
 -- [12] NHÃN TRẠNG THÁI & CẬP NHẬT GIAO DIỆN
 -- ============================================================================
-local Labels = {}
-local LastLabelTexts = {}
-
 local function SetLabels(texts)
     EnsureHighIdentity()
     for key, text in pairs(texts) do
-        if LastLabelTexts[key] ~= text then
-            local label = Labels[key]
+        if Session.lastLabelTexts[key] ~= text then
+            local label = Session.labels[key]
             if label and typeof(label.Set) == "function" then
-                LastLabelTexts[key] = text
+                Session.lastLabelTexts[key] = text
                 pcall(label.Set, label, text)
             end
         end
@@ -5328,67 +5297,68 @@ local function UpdateStatus()
 end
 
 -- ============================================================================
--- [13] GIAO DIỆN HELMHUB
+-- [13] GIAO DIỆN HELMHUB (ĐÓNG GÓI TRONG DO..END ĐỂ GIẢI PHÓNG THANH GHI LOCAL CỦA LUAU)
 -- ============================================================================
-EnsureHighIdentity()
-if not env.HelmGameName then env.HelmGameName = GAME_FOLDER_NAME end
-if not _G.HelmGameName then _G.HelmGameName = GAME_FOLDER_NAME end
-local Window = library:CreateWindow("HelmHUB | " .. GAME_FOLDER_NAME)
-
-local function AddToggle(sec, text, key, onChange)
+do
     EnsureHighIdentity()
-    return sec:AddToggle(text, Config[key], function(v)
-        Config[key] = v
-        if not uiFullyLoaded then
-            EnsureHighIdentity()
-            return
-        end
-        TriggerSave()
-        if onChange then
-            task.spawn(function()
-                SafeCallGame(onChange, v)
-            end)
-        end
-        EnsureHighIdentity()
-    end)
-end
+    if not env.HelmGameName then env.HelmGameName = GAME_FOLDER_NAME end
+    if not _G.HelmGameName then _G.HelmGameName = GAME_FOLDER_NAME end
+    local Window = library:CreateWindow("HelmHUB | " .. GAME_FOLDER_NAME)
 
-local function AddDropdown(sec, text, list, key, onChange)
-    EnsureHighIdentity()
-    return sec:AddDropdown(text, list, Config[key], false, function(val)
-        Config[key] = val
-        if not uiFullyLoaded then
-            EnsureHighIdentity()
-            return
-        end
-        TriggerSave()
-        if onChange then
-            SafeCallGame(onChange, val)
-        end
+    local function AddToggle(sec, text, key, onChange)
         EnsureHighIdentity()
-    end)
-end
-
-local function AddSlider(sec, text, min, max, decimals, key, transform)
-    EnsureHighIdentity()
-    return sec:AddSlider(text, min, Config[key], max, decimals, function(val)
-        Config[key] = transform and transform(val) or val
-        if not uiFullyLoaded then
+        return sec:AddToggle(text, Config[key], function(v)
+            Config[key] = v
+            if not uiFullyLoaded then
+                EnsureHighIdentity()
+                return
+            end
+            TriggerSave()
+            if onChange then
+                task.spawn(function()
+                    SafeCallGame(onChange, v)
+                end)
+            end
             EnsureHighIdentity()
-            return
-        end
-        TriggerSave()
-        EnsureHighIdentity()
-    end)
-end
-
-local function AddStatusLabels(sec, keys)
-    for _, key in ipairs(keys) do
-        Labels[key] = sec:AddLabel("Đang đọc...")
+        end)
     end
-end
 
-local function BuildOverviewTab()
+    local function AddDropdown(sec, text, list, key, onChange)
+        EnsureHighIdentity()
+        return sec:AddDropdown(text, list, Config[key], false, function(val)
+            Config[key] = val
+            if not uiFullyLoaded then
+                EnsureHighIdentity()
+                return
+            end
+            TriggerSave()
+            if onChange then
+                SafeCallGame(onChange, val)
+            end
+            EnsureHighIdentity()
+        end)
+    end
+
+    local function AddSlider(sec, text, min, max, decimals, key, transform)
+        EnsureHighIdentity()
+        return sec:AddSlider(text, min, Config[key], max, decimals, function(val)
+            Config[key] = transform and transform(val) or val
+            if not uiFullyLoaded then
+                EnsureHighIdentity()
+                return
+            end
+            TriggerSave()
+            EnsureHighIdentity()
+        end)
+    end
+
+    local function AddStatusLabels(sec, keys)
+        for _, key in ipairs(keys) do
+            Session.labels[key] = sec:AddLabel("Đang đọc...")
+        end
+    end
+
+    local function BuildOverviewTab()
     local tab = Window:CreateTab("Tổng Quan")
     local secInfo = tab:CreateSector("Trạng Thái Tài Khoản (" .. accountName .. ")", "left")
     AddStatusLabels(secInfo, { "ovMode", "ovCurrency", "ovRerolls", "ovTokens", "ovTeam", "ovAfk" })
@@ -5941,12 +5911,13 @@ local function BuildTeleportTab()
     AddToggle(secUi, "ESP Quái / Đơn Vị (Màu Đỏ)", "ESPEnemy")
 end
 
-BuildOverviewTab()
-BuildCombatTab()
-BuildGamemodeTab()
-BuildChampionTab()
-BuildQuestTab()
-BuildTeleportTab()
+    BuildOverviewTab()
+    BuildCombatTab()
+    BuildGamemodeTab()
+    BuildChampionTab()
+    BuildQuestTab()
+    BuildTeleportTab()
+end
 uiFullyLoaded = true
 EnsureHighIdentity()
 SaveConfig()
@@ -6003,20 +5974,18 @@ StartLoop(0.35, function()
 end)
 
 -- Vòng lặp dùng kỹ năng chiến binh
-local lastAbilityAt = 0
 StartLoop(0.25, function()
-    if Config.AutoAbilities and not Config.AutoUniversalModeFarm and os.clock() - lastAbilityAt >= (tonumber(Config.AbilityInterval) or 1.0) then
-        lastAbilityAt = os.clock()
+    if Config.AutoAbilities and not Config.AutoUniversalModeFarm and os.clock() - Session.lastAbilityAt >= (tonumber(Config.AbilityInterval) or 1.0) then
+        Session.lastAbilityAt = os.clock()
         FireAllEquippedAbilities()
     end
 end)
 
 -- Dọn dẹp định kỳ bảng cache drop & chest đã nhặt để tránh phình bộ nhớ khi treo máy nhiều giờ
-local lastSessionCachePruneAt = os.clock()
 local function PruneSessionCaches()
     local now = os.clock()
-    if now - lastSessionCachePruneAt < 60 then return end
-    lastSessionCachePruneAt = now
+    if now - Session.lastSessionCachePruneAt < 60 then return end
+    Session.lastSessionCachePruneAt = now
     for id, ts in pairs(Session.claimedDrops) do
         if type(ts) == "number" and (now - ts) > 120 then
             Session.claimedDrops[id] = nil
@@ -6030,7 +5999,6 @@ local function PruneSessionCaches()
 end
 
 -- Vòng lặp mở chest, bỏ qua hội thoại, chuyển cảnh, VoidFall, Raid/Defense/MatchResults
-local lastAutoAttackSyncAt = 0
 StartLoop(1.0, function()
     PruneSessionCaches()
     local gamemode = tostring(Workspace:GetAttribute(C.GamemodeAttribute) or "overworld")
@@ -6058,8 +6026,8 @@ StartLoop(1.0, function()
             InvokeRemote("VoidFall_Return")
         end
     end
-    if Config.AutoInGameAttack and not Session.isRecoveringUnits and (os.clock() - lastAutoAttackSyncAt >= 5.0) then
-        lastAutoAttackSyncAt = os.clock()
+    if Config.AutoInGameAttack and not Session.isRecoveringUnits and (os.clock() - Session.lastAutoAttackSyncAt >= 5.0) then
+        Session.lastAutoAttackSyncAt = os.clock()
         if LocalPlayer:GetAttribute("AutoAttack") ~= true then
             FireRemote("SetAutoAttack", true)
         end
@@ -6243,9 +6211,9 @@ env.__HelmACXCleanup = function()
             registry[model] = nil
         end
     end
-    if EspFolder then
-        pcall(EspFolder.Destroy, EspFolder)
-        EspFolder = nil
+    if Session.espFolder then
+        pcall(Session.espFolder.Destroy, Session.espFolder)
+        Session.espFolder = nil
     end
     if env.HelmLibrary and typeof(env.HelmLibrary.Destroy) == "function" then
         pcall(env.HelmLibrary.Destroy, env.HelmLibrary)
